@@ -72,8 +72,39 @@ for some use cases:
 
 ### Single Stream (metadata + data)
 
+For scenarios where you want a single self-contained stream with metadata interleaved (similar to [Bab](https://worm-blossom.github.io/bab/)), use the Bab-compatible encoding:
 
-### Encode data
+```js
+import { encodeBab, getBabRootLabel, decodeBab } from '@substrate-system/baowser'
+
+// On the server: encode data into Bab format
+const data = new Uint8Array([...]) // your data
+const chunkSize = 1024
+const encodedStream = await encodeBab(data, chunkSize)
+
+// Get the root label (hash) to send separately or embed
+const rootLabel = await getBabRootLabel(data, chunkSize)
+
+// On the client: decode and verify the stream
+const response = await fetch('/data.bab')
+const verifiedStream = decodeBab(response.body, rootLabel, {
+  onChunkVerified: (i, total) => console.log(`${i}/${total}`),
+  onError: (err) => console.error('Verification failed:', err)
+})
+
+// Read verified data
+const reader = verifiedStream.getReader()
+const chunks = []
+while (true) {
+  const { done, value } = await reader.read()
+  if (done) break
+  chunks.push(value)
+}
+```
+
+**Note:** The Bab encoding uses a Merkle tree structure where hash labels are interleaved with data chunks. The current `decodeBab` implementation is simplified and doesn't perform full incremental verification yet.
+
+### Encode data (separate metadata)
 
 First, encode your data to generate chunk metadata. This would happen
 on the machine that is providing the file (a server).

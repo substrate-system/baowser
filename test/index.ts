@@ -348,6 +348,48 @@ test('createVerifier with callback tracking', async t => {
     t.equal(onErrorCalled, false, 'onError callback should not have been called')
 })
 
+test('encodeBab creates self-contained stream with metadata', async t => {
+    const data = generateTestData(10 * 1024)  // 10KB test file
+    const chunkSize = 2 * 1024  // 2KB chunks
+
+    // Encode data into Bab format
+    const { encodeBab } = await import('../src/index.js')
+    const encodedStream = await encodeBab(data, chunkSize)
+
+    // Read the encoded stream
+    const reader = encodedStream.getReader()
+    const chunks:Uint8Array[] = []
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            chunks.push(value)
+        }
+    } finally {
+        reader.releaseLock()
+    }
+
+    // Verify we got data back
+    t.ok(chunks.length > 0, 'should have encoded chunks')
+
+    // First chunk should be the length prefix (8 bytes)
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    t.ok(totalLength > data.length, 'encoded stream should be larger than original (includes metadata)')
+})
+
+test('getBabRootLabel returns root hash', async t => {
+    const data = generateTestData(5 * 1024)  // 5KB
+    const chunkSize = 1024  // 1KB chunks
+
+    const { getBabRootLabel } = await import('../src/index.js')
+    const rootLabel = await getBabRootLabel(data, chunkSize)
+
+    t.ok(rootLabel, 'should have root label')
+    t.ok(rootLabel.length > 0, 'root label should not be empty')
+    t.equal(typeof rootLabel, 'string', 'root label should be a string')
+})
+
 // Generate test data
 function generateTestData (size:number):Uint8Array {
     const data = new Uint8Array(size)
