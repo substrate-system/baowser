@@ -39,10 +39,11 @@
     "postversion": "git push --follow-tags && npm publish",
     "prepublishOnly": "npm run build"
   },
-  "dependencies": {},
   "devDependencies": {
     "@preact/preset-vite": "^2.10.2",
+    "@preact/signals": "^2.5.0",
     "@substrate-system/debug": "^0.9.24",
+    "@substrate-system/human-bytes": "^0.0.6",
     "@substrate-system/tapout": "^0.0.28",
     "@substrate-system/tapzero": "^0.10.15",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
@@ -51,6 +52,7 @@
     "esbuild": "^0.25.8",
     "eslint": "^8.57.0",
     "eslint-config-standard": "^17.1.0",
+    "hash-wasm": "^4.12.0",
     "htm": "^3.1.1",
     "markdown-toc": "^1.2.0",
     "postcss-nesting": "^13.0.2",
