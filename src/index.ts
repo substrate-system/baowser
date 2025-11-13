@@ -1,4 +1,4 @@
-import { blake3 } from '@nichoth/hash-wasm'
+import { blake3 } from '@nichoth/hash-wasm/blake3'
 
 /**
  * Metadata for a single chunk

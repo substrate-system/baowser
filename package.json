@@ -1,8 +1,14 @@
 {
-  "private": true,
-  "type": "module",
+  "name": "@substrate-system/baowser",
   "version": "0.0.0",
+  "private": true,
+  "description": "Streaming hash-based verification in the browser",
+  "type": "module",
   "main": "dist/index.js",
+  "directories": {
+    "example": "example",
+    "test": "test"
+  },
   "files": [
     "./dist/*"
   ],
@@ -24,7 +30,9 @@
   },
   "scripts": {
     "lint": "eslint \"./**/*.{ts,js}\"",
-    "test": "npm run build && esbuild ./test/index.ts --bundle | tapout",
+    "test:browser": "npm run build && esbuild ./test/index.ts --bundle | tapout",
+    "test:node": "esbuild ./test/index.ts --platform=node --bundle | node",
+    "test": "npm run test:node && npm run test:browser",
     "build-cjs": "esbuild src/*.ts --format=cjs --keep-names --tsconfig=tsconfig.build.json --outdir=./dist --out-extension:.js=.cjs --sourcemap",
     "build-cjs:min": "esbuild src/*.ts --format=cjs --minify --keep-names --tsconfig=tsconfig.build.json --outdir=./dist --out-extension:.js=.min.cjs --sourcemap",
     "build-esm": "esbuild src/*.ts --format=esm --metafile=dist/meta.json --keep-names --tsconfig=tsconfig.build.json --outdir=./dist --sourcemap && tsc --emitDeclarationOnly --project tsconfig.build.json --outDir dist",
@@ -39,15 +47,17 @@
     "postversion": "git push --follow-tags && npm publish",
     "prepublishOnly": "npm run build"
   },
+  "dependencies": {
+    "@nichoth/hash-wasm": "^4.13.0"
+  },
   "devDependencies": {
-    "@nichoth/hash-wasm": "^4.12.0",
     "@preact/preset-vite": "^2.10.2",
     "@preact/signals": "^2.5.0",
     "@substrate-system/css-normalize": "^0.0.13",
-    "@substrate-system/debug": "^0.9.24",
+    "@substrate-system/debug": "^0.9.32",
     "@substrate-system/human-bytes": "^0.0.6",
     "@substrate-system/tapout": "^0.0.28",
-    "@substrate-system/tapzero": "^0.10.15",
+    "@substrate-system/tapzero": "^0.10.16",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "auto-changelog": "^2.4.0",
@@ -63,6 +73,20 @@
     "typescript": "^5.9.2",
     "vite": "^7.0.6"
   },
-  "author": "nichoth <nichoth@nichoth.com> (https://nichoth.com)",
-  "license": "SEE LICENSE IN LICENSE"
+  "keywords": [
+    "stream",
+    "hash",
+    "blake3",
+    "bao"
+  ],
+  "homepage": "https://github.com/substrate-system/baowser",
+  "bugs": {
+    "url": "https://github.com/substrate-system/baowser/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/substrate-system/baowser.git"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "nichoth <nichoth@nichoth.com> (https://nichoth.com)"
 }

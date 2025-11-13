@@ -245,7 +245,7 @@ async function verifyFile () {
             }
         })
 
-        // Pipe through verifier
+        // Pipe through verifier stream
         const verifiedChunks:Uint8Array[] = []
         const verifier = createVerifier(metadata, {
             onChunkVerified: (chunkIndex, totalChunks) => {
