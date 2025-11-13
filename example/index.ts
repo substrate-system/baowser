@@ -57,11 +57,17 @@ const Example:FunctionComponent = function () {
     }, [state.logs.value])
 
     return html`<div class="container">
-        <h1>Bao/BLAKE3 Streaming Demo</h1>
+        <h1>
+            Baowser${NBSP}
+            <a href="https://github.com/substrate-system/baowser">
+                github.com/substrate-system/baowser
+            </a>
+        </h1>
 
         <p class="subtitle">
-            Streaming verification using the browser's
-            native Streams API with BLAKE3 hashes.
+            Verify data using the <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">
+                web streams API
+            </a> and BLAKE3 hashes.
         </p>
 
         <p>
@@ -81,7 +87,7 @@ const Example:FunctionComponent = function () {
             This module exposes a <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">
                 browser streams API
             </a> interface for verification. You can fetch something and then
-            "pipe" it through this module to verify the download as
+            "pipe" it through this module to verify the download is correct as
             it is transfering.
         </p>
 
@@ -309,12 +315,12 @@ async function verifyFile () {
 
         addLog('', 'info')
         addLog(
-            'File verified authentic and complete',
+            'File verified',
             'success'
         )
         addLog('', 'info')
         addLog(
-            'Each chunk was verified as it streamed through.',
+            'Each chunk was verified before the download finished.',
             'info'
         )
     } catch (error) {

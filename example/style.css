@@ -47,6 +47,13 @@ img {
 h1 {
     font-size: 2rem;
     margin-bottom: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+
+    & a {
+        font-size: 1rem;
+    }
 }
 
 .content-preview {

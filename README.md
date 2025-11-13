@@ -17,7 +17,22 @@ where the name comes from.
 [See a live demo](https://substrate-system.github.io/baowser/)
 
 <details><summary><h2>Contents</h2></summary>
+
 <!-- toc -->
+
+- [install](#install)
+- [API](#api)
+  * [ESM](#esm)
+  * [Common JS](#common-js)
+- [Use](#use)
+  * [Encoding data](#encoding-data)
+  * [Streaming verification](#streaming-verification)
+  * [Convenience method](#convenience-method)
+- [See Also](#see-also)
+  * [Some Important Dependencies](#some-important-dependencies)
+
+<!-- tocstop -->
+
 </details>
 
 ## install
@@ -45,7 +60,20 @@ const { encode, createVerifier, verifyStream } = require('baowser')
 
 This is a streaming API (the browser's native Streams API).
 
-### Encoding data
+### Metadata
+
+Metadata can be generated as a separate object from the blob. This makes sense
+for some use cases:
+
+* Store metadata in a database but data in object storage
+* Transmit metadata via different channels (API vs CDN)
+* Update metadata without re-uploading data
+
+
+### Single Stream (metadata + data)
+
+
+### Encode data
 
 First, encode your data to generate chunk metadata. This would happen
 on the machine that is providing the file (a server).
@@ -65,17 +93,25 @@ const metadata = await encode(data, chunkSize)
 // - chunkSize: chunk size used
 ```
 
-### Streaming verification
+### Verify data
 
-Use the `createVerifier`
+Use the `createVerifier` to create a
 [`TransformStream`](https://developer.mozilla.org/en-US/docs/Web/API/TransformStream)
-to verify chunks as they stream in.
+and verify the stream as it downloads.
+
+
+#### When a hash mismatch is detected
+
+1. The onError callback is invoked (if you provided one) with the error
+2. An error is thrown from the stream with a message like:
+   Chunk 2 hash mismatch. Expected: abc123..., Got: def456...
+3. This causes reader.read() to reject, triggering the catch block
 
 ```js
 import { createVerifier } from '@substrate-system/baowser'
 
 // Create a ReadableStream (e.g., from fetch)
-const response = await fetch('/data')
+const response = await fetch('/data.jpg')
 const stream = response.body
 
 // Create verifier with callbacks
@@ -91,29 +127,91 @@ const verifier = createVerifier(metadata, {
 // Pipe through verifier
 const verifiedStream = stream.pipeThrough(verifier)
 
-// Read verified data
+// Collect all verified chunks
+const chunks = []
 const reader = verifiedStream.getReader()
-while (true) {
-  const { done, value } = await reader.read()
-  if (done) break
 
-  // Use verified chunk
-  console.log('Got verified chunk:', value)
+try {
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+  }
+} catch (error) {
+  // Verification failed - hash mismatch detected
+  console.error('Stream verification failed:', error.message)
+  throw error  // Re-throw or handle as appropriate
+} finally {
+  reader.releaseLock()
 }
+
+// stream is complete now
+// Combine chunks into complete data
+const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+const completeData = new Uint8Array(totalLength)
+let offset = 0
+for (const chunk of chunks) {
+  completeData.set(chunk, offset)
+  offset += chunk.length
+}
+
+// Now use the verified data - create a Blob and display it
+const blob = new Blob([completeData], { type: 'image/jpeg' })
+const blobUrl = URL.createObjectURL(blob)
+
+// Add to DOM
+const img = document.createElement('img')
+img.src = blobUrl
+document.body.appendChild(img)
+
+// Or trigger a download
+const link = document.createElement('a')
+link.href = blobUrl
+link.download = 'verified-data.jpg'
+link.click()
+
+// Clean up the object URL when done
+URL.revokeObjectURL(blobUrl)
 ```
 
-### Convenience method
+### `verifyStream`
 
-Can use `verifyStream` to verify and collect all data.
+Can use `verifyStream` to verify and collect all data. This is a
+convenience function that handles collecting the chunks.
 
 ```js
 import { verifyStream } from '@substrate-system/baowser'
 
-const response = await fetch('/data')
+// First, fetch the metadata (generated during encoding on the server)
+// The server would provide this
+const metadataResponse = await fetch('/data.metadata.json')
+const metadata = await metadataResponse.json()
+
+// Now fetch and verify the actual data
+const response = await fetch('/data.jpg')
 const verifiedData = await verifyStream(response.body, metadata, {
   onChunkVerified: (i, total) => console.log(`${i}/${total}`),
   onError: (err) => console.log('oh no', err.message)
 })
 
 // verifiedData is a Uint8Array with all verified data
+// Create a Blob and display the image
+const blob = new Blob([verifiedData], { type: 'image/jpeg' })
+const blobUrl = URL.createObjectURL(blob)
+
+// Add to DOM
+const img = document.createElement('img')
+img.src = blobUrl
+document.body.appendChild(img)
+
+// Clean up when done
+img.onload = () => URL.revokeObjectURL(blobUrl)
 ```
+
+## See Also
+
+### Some Important Dependencies
+
+* [nichoth/hash-wasm](https://github.com/nichoth/hash-wasm) &mdash; a fork of
+  [Daninet/hash-wasm](https://github.com/Daninet/hash-wasm). It doesn't add
+  or change anything, just keeping
