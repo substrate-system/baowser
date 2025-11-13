@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bao/BLAKE3 Standalone Demo</title>
+  <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/index.umd.min.js"></script>
+</head>
+
+<body>
+  <script>
+    const { blake3 } = hashwasm;
+    let selectedFile = null;
+    let encodedData = null;
+
+    function log(message, type = 'info') {
+      const logContainer = document.getElementById('logContainer');
+      const entry = document.createElement('div');
+      entry.className = `log-entry log-${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logContainer.appendChild(entry);
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    function clearLog() {
+      document.getElementById('logContainer').innerHTML = '';
+      document.getElementById('stats').style.display = 'none';
+    }
+
+    function showStats(data) {
+      const statsContainer = document.getElementById('stats');
+      statsContainer.style.display = 'grid';
+      statsContainer.innerHTML = `
+        <div class="stat-card">
+          <div class="stat-label">File Size</div>
+          <div class="stat-value">${(data.fileSize / 1024).toFixed(2)} KB</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Chunk Size</div>
+          <div class="stat-value">${data.chunkSize} bytes</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Total Chunks</div>
+          <div class="stat-value">${data.chunkCount}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Overhead</div>
+          <div class="stat-value">${((data.chunkCount * 64 / data.fileSize) * 100).toFixed(1)}%</div>
+        </div>
+      `;
+    }
+
+    async function encodeFile() {
+      if (!selectedFile) return;
+      
+      clearLog();
+      document.getElementById('encodeBtn').disabled = true;
+      
+      try {
+        log(`Encoding file: ${selectedFile.name}`, 'info');
+        log(`File size: ${selectedFile.size} bytes`, 'info');
+        
+        const chunkSize = parseInt(document.getElementById('chunkSize').value);
+        log(`Chunk size: ${chunkSize} bytes`, 'info');
+        
+        const fileBuffer = await selectedFile.arrayBuffer();
+        const fileData = new Uint8Array(fileBuffer);
+        
+        // Calculate root hash
+        log('\nCalculating root hash...', 'info');
+        const rootHash = await blake3(fileData);
+        log(`Root hash: ${rootHash}`, 'hash');
+        
+        // Break into chunks and hash each
+        log('\nChunking and hashing...', 'info');
+        const chunks = [];
+        for (let offset = 0; offset < fileData.length; offset += chunkSize) {
+          const end = Math.min(offset + chunkSize, fileData.length);
+          const chunk = fileData.slice(offset, end);
+          const chunkHash = await blake3(chunk);
+          
+          chunks.push({
+            size: chunk.length,
+            hash: chunkHash,
+            data: Array.from(chunk)
+          });
+          
+          if (chunks.length % 10 === 0) {
+            log(`Processed ${chunks.length} chunks...`, 'info');
+          }
+        }
+        
+        log(`\n✓ Encoded ${chunks.length} chunks successfully!`, 'success');
+        
+        encodedData = {
+          fileName: selectedFile.name,
+          fileSize: fileData.length,
+          rootHash,
+          chunkSize,
+          chunkCount: chunks.length,
+          chunks
+        };
+        
+        showStats(encodedData);
+        document.getElementById('verifyBtn').disabled = false;
+        
+      } catch (error) {
+        log(`\n✗ Error: ${error.message}`, 'error');
+      } finally {
+        document.getElementById('encodeBtn').disabled = false;
+      }
+    }
+
+    async function verifyFile() {
+      if (!encodedData) return;
+      
+      clearLog();
+      document.getElementById('verifyBtn').disabled = true;
+      
+      try {
+        log('=== Starting Verified Streaming Simulation ===', 'info');
+        log(`Expected root hash: ${encodedData.rootHash}`, 'hash');
+        log(`Total chunks to download: ${encodedData.chunkCount}\n`, 'info');
+        
+        const verifiedChunks = [];
+        
+        // Simulate downloading and verifying each chunk
+        for (let i = 0; i < encodedData.chunks.length; i++) {
+          const chunk = encodedData.chunks[i];
+          
+          // Simulate network delay
+          await new Promise(resolve => setTimeout(resolve, 20));
+          
+          log(`\n--- Chunk ${i + 1}/${encodedData.chunkCount} ---`, 'info');
+          log(`Expected hash: ${chunk.hash}`, 'hash');
+          
+          // Convert chunk data back to Uint8Array
+          const chunkData = new Uint8Array(chunk.data);
+          
+          // Verify chunk hash
+          const computedHash = await blake3(chunkData);
+          log(`Computed hash: ${computedHash}`, 'hash');
+          
+          if (computedHash !== chunk.hash) {
+            throw new Error(`Chunk ${i + 1} hash mismatch!`);
+          }
+          
+          log(`✓ Chunk verified and buffered`, 'success');
+          verifiedChunks.push(chunkData);
+        }
+        
+        log('\n=== Finalizing Verification ===', 'info');
+        
+        // Combine all chunks
+        const totalLength = verifiedChunks.reduce((sum, c) => sum + c.length, 0);
+        const fullFile = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of verifiedChunks) {
+          fullFile.set(chunk, offset);
+          offset += chunk.length;
+        }
+        
+        log(`Reconstructed file size: ${fullFile.length} bytes`, 'info');
+        
+        // Verify root hash
+        log('\nVerifying root hash...', 'info');
+        const computedRootHash = await blake3(fullFile);
+        log(`Expected: ${encodedData.rootHash}`, 'hash');
+        log(`Computed: ${computedRootHash}`, 'hash');
+        
+        if (computedRootHash !== encodedData.rootHash) {
+          throw new Error('Root hash mismatch! File integrity check failed.');
+        }
+        
+        log('\n✓✓✓ SUCCESS! File verified authentic and complete! ✓✓✓', 'success');
+        log('\nKey achievement: Each chunk was verified BEFORE the next was downloaded.', 'info');
+        log('In a real scenario, this means corrupted data is detected immediately,', 'info');
+        log('not after waiting for the entire multi-gigabyte file to download.', 'info');
+        
+      } catch (error) {
+        log(`\n✗ Error: ${error.message}`, 'error');
+      } finally {
+        document.getElementById('verifyBtn').disabled = false;
+      }
+    }
+
+    // Setup upload area
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+    
+    uploadArea.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      uploadArea.classList.add('dragover');
+    });
+    
+    uploadArea.addEventListener('dragleave', () => {
+      uploadArea.classList.remove('dragover');
+    });
+    
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        selectedFile = e.dataTransfer.files[0];
+        uploadArea.innerHTML = `
+          <p style="font-size: 18px; margin-bottom: 10px;">✓ Selected: ${selectedFile.name}</p>
+          <p style="font-size: 14px; color: #666;">${(selectedFile.size / 1024).toFixed(2)} KB</p>
+        `;
+        document.getElementById('encodeBtn').disabled = false;
+        encodedData = null;
+        document.getElementById('verifyBtn').disabled = true;
+      }
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        selectedFile = e.target.files[0];
+        uploadArea.innerHTML = `
+          <p style="font-size: 18px; margin-bottom: 10px;">✓ Selected: ${selectedFile.name}</p>
+          <p style="font-size: 14px; color: #666;">${(selectedFile.size / 1024).toFixed(2)} KB</p>
+        `;
+        document.getElementById('encodeBtn').disabled = false;
+        encodedData = null;
+        document.getElementById('verifyBtn').disabled = true;
+      }
+    });
+
+    // Button handlers
+    document.getElementById('encodeBtn').addEventListener('click', encodeFile);
+    document.getElementById('verifyBtn').addEventListener('click', verifyFile);
+    document.getElementById('clearBtn').addEventListener('click', clearLog);
+
+    // Initial log
+    log('Ready! Upload a file to begin.', 'info');
+    log('This demo runs entirely in your browser - no server needed.', 'info');
+  </script>
+</body>
+</html>

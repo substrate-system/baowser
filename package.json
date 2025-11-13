@@ -39,10 +39,13 @@
     "postversion": "git push --follow-tags && npm publish",
     "prepublishOnly": "npm run build"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@nichoth/hash-wasm": "^4.12.0",
     "@preact/preset-vite": "^2.10.2",
+    "@preact/signals": "^2.5.0",
+    "@substrate-system/css-normalize": "^0.0.13",
     "@substrate-system/debug": "^0.9.24",
+    "@substrate-system/human-bytes": "^0.0.6",
     "@substrate-system/tapout": "^0.0.28",
     "@substrate-system/tapzero": "^0.10.15",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
