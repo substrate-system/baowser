@@ -7,7 +7,10 @@ import { type Signal, signal, useComputed } from '@preact/signals'
 import { humanBytes } from '@substrate-system/human-bytes'
 import llamaBase64 from './llama.jpg.base64'
 import { encode, createVerifier, type EncodedMetadata } from '../src/index'
+import Debug from '@substrate-system/debug'
 import '@substrate-system/css-normalize'
+
+const debug = Debug(import.meta.env.DEV)
 
 const EM_DASH = '\u2014'
 const NBSP = '\u00A0'
@@ -34,7 +37,7 @@ const state:{
     base64Text:Signal<string>;
     path:Signal<string>;
 } = {
-    path: signal('/'),
+    path: signal(location.pathname),
     chunkSize: signal(1024),
     encodedData: signal(null),
     logs: signal([]),
@@ -42,6 +45,11 @@ const state:{
     isEncoding: signal(false),
     isVerifying: signal(false),
     base64Text: signal(llamaBase64),
+}
+
+if (import.meta.env.DEV || import.meta.env.MODE === 'staging') {
+    // @ts-expect-error dev
+    window.state = state
 }
 
 const onRoute = Route()
@@ -69,7 +77,7 @@ const routes = [
     },
     {
         path: '/single-stream',
-        text: 'Singal Stream'
+        text: 'Single Stream'
     }
 ]
 
@@ -97,14 +105,16 @@ const Example:FunctionComponent = function () {
         </h1>
 
         <p class="subtitle">
-            Verify data using the <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">
+            Verify data using the${NBSP}
+            <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">
                 web streams API
-            </a> and BLAKE3 hashes.
+            </a>${NBSP}
+            and BLAKE3 hashes in the browser.
         </p>
 
         <p>
-            Below is the image we are transferring. On the right is the same
-            image, <code>base64-encoded</code> to a string.
+            Below is the image we are transferring. Below on the right is the
+            same image, <code>base64-encoded</code> to a string.
         </p>
 
         <p>
@@ -118,9 +128,9 @@ const Example:FunctionComponent = function () {
         <p>
             This module exposes a <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">
                 browser streams API
-            </a> interface for verification. You can fetch something and then
+            </a> interface. You can fetch something and then
             "pipe" it through this module to verify the download is correct as
-            it is transfering.
+            it is streaming.
         </p>
 
         <nav class="routes">
@@ -132,6 +142,10 @@ const Example:FunctionComponent = function () {
                 })}
             </ul>
         </nav>
+
+        <div class="explanation">
+            <${Explanation} route=${state.path.value} />
+        </div>
 
         <div class="content-preview">
             <div class="preview-item">
@@ -178,7 +192,10 @@ const Example:FunctionComponent = function () {
                     state.isEncoding.value
                 }
             >
-                ${state.isVerifying.value ? 'Verifying...' : 'Download & Verify'}
+                ${state.isVerifying.value ?
+                    'Verifying...' :
+                    `Download & Verify ${EM_DASH} ${getRoute()?.text}`
+                }
             </button>
             <button
                 onClick=${clearLog}
@@ -186,6 +203,41 @@ const Example:FunctionComponent = function () {
             >
                 Clear Log
             </button>
+        </div>
+
+        <div class="explanation">
+            ${state.path.value.includes('/single-stream') ?
+                html`<p>
+                    All verification data is included in the stream.
+                    You only need to learn the root hash, and then you can
+                    veryify the chunks as they arrive.
+                </p>
+                <p>
+                    So if there is some trust between Alice and Bob, then Alice
+                    can learn the root hash from Bob, but download the chunks
+                    from anywhere.
+                </p>
+                ` :
+                html`<p>
+                    Here verification metadata is created as an external object.
+                    We create a transform stream with <code>
+                        createVerifier(metadata)
+                    </code>,${NBSP}
+                    and the stream uses the expected chunk size from the metadata
+                    to split the input into chunks, then it compares the computed
+                    hash with the hash for that chunk in the metadata.
+                </p>
+                <p>
+                    If the hash is ok, it passes the chunk along through the
+                    stream and calls the <code>onChunkVerified</code> callback.
+                </p>
+                <p>
+                    If the hash does not match, it throws an error and aborts
+                    the stream. So we stop downloading on hash mismatch.
+                </p>
+                `
+
+            }
         </div>
 
         <div class="stats">
@@ -296,6 +348,7 @@ async function verifyFile () {
         // Pipe through verifier stream
         const verifiedChunks:Uint8Array[] = []
         const verifier = createVerifier(metadata, {
+            // just log every chunk that is verified
             onChunkVerified: (chunkIndex, totalChunks) => {
                 // Only log every 50 chunks to avoid overwhelming the log
                 if (
@@ -310,6 +363,8 @@ async function verifyFile () {
                     addLog('Chunk verified and buffered', 'success')
                 }
             },
+
+            // here we listen for errors
             onError: (err) => {
                 addLog(`Verification error: ${err.message}`, 'error')
             }
@@ -319,6 +374,9 @@ async function verifyFile () {
         const reader = verifiedStream.getReader()
 
         // Read verified chunks
+        // NOTE: If a hash mismatch is detected, reader.read() will throw
+        // an error, aborting the stream processing.
+        // No more chunks will be processed or downloaded.
         while (true) {
             const { done, value } = await reader.read()
             if (done) break
@@ -422,6 +480,10 @@ async function encodeFile () {
     }
 }
 
+function createStream () {
+    // create the bab-encoded stream
+}
+
 function handleChunkSizeChange (ev:Event) {
     const target = ev.target as HTMLSelectElement
     state.chunkSize.value = parseInt(target.value)
@@ -432,4 +494,39 @@ function handleChunkSizeChange (ev:Event) {
 function handleTextareaChange (ev:Event) {
     const target = ev.target as HTMLTextAreaElement
     state.base64Text.value = target.value
+}
+
+function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
+    debug('the route', route)
+
+    if (route === '/') {
+        return html`<p>
+            Metadata can be generated separately from the blob content.
+            This is good in <a href="https://github.com/substrate-system/baowser#metadata">
+                some use-cases
+            </a>. We fetch the blob, then call <code>createVerifier(metadata)</code>
+            ${NBSP}to create a <a href="https://developer.mozilla.org/en-US/docs/Web/API/TransformStream">
+                transform stream
+            </a> that will use the metadata to verify the file as it streams in.
+        </p>`
+    }
+
+    if (route.includes('single-stream')) {
+        return html`<p>
+            Get a single stream that includes metadata and
+            blob content mixed together.
+        </p>
+        <p>
+            The function <code>decodeBab</code>, will return a new stream of
+            just the content (no metadata), and will throw an error if any
+            of the hashes are bad.
+        </p>
+        `
+    }
+
+    return null
+}
+
+function getRoute ():{ path:string, text:string }|null {
+    return (routes.find(r => r.path === state.path.value) || null)
 }

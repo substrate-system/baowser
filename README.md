@@ -25,9 +25,11 @@ where the name comes from.
   * [ESM](#esm)
   * [Common JS](#common-js)
 - [Use](#use)
-  * [Encoding data](#encoding-data)
-  * [Streaming verification](#streaming-verification)
-  * [Convenience method](#convenience-method)
+  * [Metadata](#metadata)
+  * [Single Stream (metadata + data)](#single-stream-metadata--data)
+  * [External Metadata](#external-metadata)
+  * [Verify data](#verify-data)
+  * [`verifyStream`](#verifystream)
 - [See Also](#see-also)
   * [Some Important Dependencies](#some-important-dependencies)
 
@@ -69,12 +71,26 @@ for some use cases:
 * Transmit metadata via different channels (API vs CDN)
 * Update metadata without re-uploading data
 
+Or the metadata can be interleaved with the blob content. In that case only
+a single stream is required for verification (no external metadata).
+
+The stream uses a Merkle tree structure with interleaved metadata. You want
+to use the included `decodeBab` function. It transforms the incoming stream
+to a standard blob stream (without metadata), and also verifies that the data
+is correct.
+
+If the hash does not match, it will throw an error and abort the stream.
 
 ### Single Stream (metadata + data)
 
 When you want a single self-contained stream with metadata interleaved
 (similar to [Bab](https://worm-blossom.github.io/bab/)),
-use the Bab-compatible encoding:
+use the Bab-compatible encoding.
+
+You only need the root hash, which you can get cheaply, and then you can verify
+all the chunks as they arrive.
+
+The 
 
 ```js
 import {
@@ -120,7 +136,7 @@ recursively verifying each node's label matches the computed hash from
 its children, ensuring the entire tree structure is valid.
 
 
-### Separate Metadata
+### External Metadata
 
 First, encode your data to generate chunk metadata. This would happen
 on the machine that is providing the file (a server).
