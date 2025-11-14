@@ -1,5 +1,12 @@
 import { test } from '@substrate-system/tapzero'
-import { encode, verifyStream, createVerifier } from '../src/index.js'
+import {
+    encode,
+    verifyStream,
+    createVerifier,
+    encodeBab,
+    getBabRootLabel,
+    decodeBab
+} from '../src/index.js'
 
 const CHUNK_SIZE = 64 * 1024  // 64KB chunks
 
@@ -344,8 +351,10 @@ test('createVerifier with callback tracking', async t => {
         reader.releaseLock()
     }
 
-    t.ok(onChunkVerifiedCalled, 'onChunkVerified callback should have been called')
-    t.equal(onErrorCalled, false, 'onError callback should not have been called')
+    t.ok(onChunkVerifiedCalled,
+        'onChunkVerified callback should have been called')
+    t.equal(onErrorCalled, false,
+        'onError callback should not have been called')
 })
 
 test('encodeBab creates self-contained stream with metadata', async t => {
@@ -353,7 +362,6 @@ test('encodeBab creates self-contained stream with metadata', async t => {
     const chunkSize = 2 * 1024  // 2KB chunks
 
     // Encode data into Bab format
-    const { encodeBab } = await import('../src/index.js')
     const encodedStream = await encodeBab(data, chunkSize)
 
     // Read the encoded stream
@@ -375,14 +383,13 @@ test('encodeBab creates self-contained stream with metadata', async t => {
 
     // First chunk should be the length prefix (8 bytes)
     const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    t.ok(totalLength > data.length, 'encoded stream should be larger than original (includes metadata)')
+    t.ok(totalLength > data.length,
+        'encoded stream should be larger than original (includes metadata)')
 })
 
 test('getBabRootLabel returns root hash', async t => {
     const data = generateTestData(5 * 1024)  // 5KB
     const chunkSize = 1024  // 1KB chunks
-
-    const { getBabRootLabel } = await import('../src/index.js')
     const rootLabel = await getBabRootLabel(data, chunkSize)
 
     t.ok(rootLabel, 'should have root label')
@@ -393,8 +400,6 @@ test('getBabRootLabel returns root hash', async t => {
 test('encodeBab and decodeBab round-trip verification', async t => {
     const data = generateTestData(8 * 1024)  // 8KB test file
     const chunkSize = 2 * 1024  // 2KB chunks
-
-    const { encodeBab, getBabRootLabel, decodeBab } = await import('../src/index.js')
 
     // Encode data
     const encodedStream = await encodeBab(data, chunkSize)
@@ -445,8 +450,6 @@ test('encodeBab and decodeBab with realistic file size (llama image)', async t =
     const data = generateTestData(2180000)  // ~2.08 MB
     const chunkSize = 1024
 
-    const { encodeBab, getBabRootLabel, decodeBab } = await import('../src/index.js')
-
     // Encode data
     const encodedStream = await encodeBab(data, chunkSize)
     const rootLabel = await getBabRootLabel(data, chunkSize)
@@ -488,8 +491,6 @@ test('encodeBab and decodeBab with realistic file size (llama image)', async t =
 test('decodeBab detects corrupted data', async t => {
     const data = generateTestData(6 * 1024)  // 6KB
     const chunkSize = 2 * 1024  // 2KB chunks
-
-    const { encodeBab, getBabRootLabel, decodeBab } = await import('../src/index.js')
 
     // Encode data
     const encodedStream = await encodeBab(data, chunkSize)
@@ -553,12 +554,11 @@ test('decodeBab detects corrupted data', async t => {
     }
 })
 
-test('decodeBab detects early corruption without reading entire stream', async t => {
+test('detect corruption early without reading the entire stream', async t => {
+    t.plan(2)
     // Create test data with 6 chunks
     const data = generateTestData(6 * 1024)  // 6KB
     const chunkSize = 1024  // 1KB chunks
-
-    const { encodeBab, getBabRootLabel, decodeBab } = await import('../src/index.js')
 
     // Encode the original data
     const rootLabel = await getBabRootLabel(data, chunkSize)
