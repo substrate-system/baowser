@@ -292,52 +292,55 @@ function hexToBytes (hex:string):Uint8Array {
 }
 
 /**
- * Build a Merkle tree from data chunks
+ * Build a Merkle tree from data chunks using range-based splitting
+ * This matches the decoder's top-down approach
  */
 async function buildMerkleTree (
     data:Uint8Array,
     chunkSize:number
 ):Promise<MerkleNode> {
-    // Create leaf nodes
-    const leaves:MerkleNode[] = []
-    for (let offset = 0; offset < data.length; offset += chunkSize) {
-        const end = Math.min(offset + chunkSize, data.length)
-        const chunk = data.slice(offset, end)
-        const label = await hashChunk(chunk)
+    const numChunks = Math.ceil(data.length / chunkSize)
 
-        leaves.push({
-            label,
-            isLeaf: true,
-            data: chunk,
-            byteCount: chunk.length
-        })
-    }
+    // Recursive function to build a node for a range of chunks
+    async function buildNode (start:number, end:number):Promise<MerkleNode> {
+        if (start === end) {
+            // Leaf node - single chunk
+            const chunkIndex = start
+            const isLastChunk = chunkIndex === numChunks - 1
+            const offset = chunkIndex * chunkSize
+            const size = isLastChunk
+                ? data.length - offset
+                : chunkSize
 
-    // Build tree bottom-up
-    let currentLevel = leaves
-    while (currentLevel.length > 1) {
-        const nextLevel:MerkleNode[] = []
+            const chunk = data.slice(offset, offset + size)
+            const label = await hashChunk(chunk)
 
-        for (let i = 0; i < currentLevel.length; i += 2) {
-            const left = currentLevel[i]
-            const right = currentLevel[i + 1] || left // Handle odd number of nodes
-
-            const byteCount = left.byteCount + (right ? right.byteCount : 0)
-            const label = await hashInner(left.label, right.label, byteCount)
-
-            nextLevel.push({
+            return {
                 label,
-                isLeaf: false,
-                left,
-                right,
-                byteCount
-            })
+                isLeaf: true,
+                data: chunk,
+                byteCount: chunk.length
+            }
         }
 
-        currentLevel = nextLevel
+        // Internal node - split range
+        const mid = Math.floor((start + end) / 2)
+        const left = await buildNode(start, mid)
+        const right = await buildNode(mid + 1, end)
+
+        const byteCount = left.byteCount + right.byteCount
+        const label = await hashInner(left.label, right.label, byteCount)
+
+        return {
+            label,
+            isLeaf: false,
+            left,
+            right,
+            byteCount
+        }
     }
 
-    return currentLevel[0]
+    return buildNode(0, numChunks - 1)
 }
 
 /**
@@ -356,51 +359,60 @@ export async function encodeBab (
 ):Promise<ReadableStream<Uint8Array>> {
     const tree = await buildMerkleTree(data, chunkSize)
 
+    // Create a generator that yields chunks lazily
+    async function * generateChunks ():AsyncGenerator<Uint8Array> {
+        // Yield length prefix (8 bytes, little-endian)
+        const lengthBytes = new Uint8Array(8)
+        const view = new DataView(lengthBytes.buffer)
+        view.setBigUint64(0, BigInt(data.length), true)
+        yield lengthBytes
+
+        // Yield tree in depth-first order
+        yield * emitNodeGenerator(tree)
+    }
+
+    const iterator = generateChunks()
+
     return new ReadableStream({
-        async start (controller) {
-            // Emit length prefix (8 bytes, little-endian)
-            const lengthBytes = new Uint8Array(8)
-            const view = new DataView(lengthBytes.buffer)
-            view.setBigUint64(0, BigInt(data.length), true)
-            controller.enqueue(lengthBytes)
-
-            // Emit tree in depth-first order
-            await emitNode(tree, controller)
-
-            controller.close()
+        async pull (controller) {
+            const { done, value } = await iterator.next()
+            if (done) {
+                controller.close()
+            } else {
+                controller.enqueue(value)
+            }
         }
     })
 }
 
 /**
- * Emit a node and its children in depth-first order
+ * Emit a node and its children in depth-first order using a generator
  */
-async function emitNode (
-    node:MerkleNode,
-    controller:ReadableStreamDefaultController<Uint8Array>
-):Promise<void> {
+async function * emitNodeGenerator (
+    node:MerkleNode
+):AsyncGenerator<Uint8Array> {
     if (node.isLeaf) {
-        // Emit chunk data
+        // Yield chunk data
         if (node.data) {
-            controller.enqueue(node.data)
+            yield node.data
         }
     } else {
-        // Emit labels for left and right children
+        // Yield labels for left and right children
         if (node.left) {
             const labelBytes = hexToBytes(node.left.label)
-            controller.enqueue(labelBytes)
+            yield labelBytes
         }
         if (node.right) {
             const labelBytes = hexToBytes(node.right.label)
-            controller.enqueue(labelBytes)
+            yield labelBytes
         }
 
-        // Recursively emit children
+        // Recursively yield children
         if (node.left) {
-            await emitNode(node.left, controller)
+            yield * emitNodeGenerator(node.left)
         }
         if (node.right) {
-            await emitNode(node.right, controller)
+            yield * emitNodeGenerator(node.right)
         }
     }
 }
@@ -415,154 +427,176 @@ async function emitNode (
  * @param options - Optional callbacks for verification events
  * @returns A ReadableStream of verified data chunks
  */
-export async function decodeBab (
+export function decodeBab (
     stream:ReadableStream<Uint8Array>,
     rootLabel:string,
     chunkSize:number,
     options:VerifierOptions = {}
-):Promise<ReadableStream<Uint8Array>> {
-    const reader = stream.getReader()
+):ReadableStream<Uint8Array> {
     const LABEL_SIZE = 32  // BLAKE3 produces 32-byte hashes
 
-    // Read and buffer entire stream first (simplification for now)
-    const chunks:Uint8Array[] = []
-    try {
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            chunks.push(value)
-        }
-    } finally {
-        reader.releaseLock()
-    }
-
-    // Combine into single buffer
-    const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    const fullBuffer = new Uint8Array(totalBytes)
-    let writeOffset = 0
-    for (const chunk of chunks) {
-        fullBuffer.set(chunk, writeOffset)
-        writeOffset += chunk.length
-    }
-
-    // Parse the stream
-    let offset = 0
-
-    // Read length prefix
-    if (fullBuffer.length < 8) {
-        throw new Error('Stream too short for length prefix')
-    }
-    const view = new DataView(fullBuffer.buffer, fullBuffer.byteOffset)
-    const totalLength = Number(view.getBigUint64(0, true))
-    offset += 8
-
-    const numChunks = Math.ceil(totalLength / chunkSize)
-    const verifiedChunks:Uint8Array[] = []
-
-    // Recursive function to decode a node
-    async function decodeNode (
-        start:number,
-        end:number
-    ):Promise<string> {
-        if (start === end) {
-            // Leaf node - read chunk
-            const chunkIndex = start
-            const isLastChunk = chunkIndex === numChunks - 1
-            const expectedSize = isLastChunk
-                ? totalLength - (chunkIndex * chunkSize)
-                : chunkSize
-
-            if (offset + expectedSize > fullBuffer.length) {
-                throw new Error(`Not enough data for chunk ${chunkIndex}`)
-            }
-
-            const chunkData = fullBuffer.slice(offset, offset + expectedSize)
-            offset += expectedSize
-
-            // Verify chunk and get its label
-            const label = await hashChunk(chunkData)
-            verifiedChunks[chunkIndex] = chunkData
-
-            if (options.onChunkVerified) {
-                options.onChunkVerified(chunkIndex + 1, numChunks)
-            }
-
-            return label
-        }
-
-        // Internal node - read left and right labels first
-        if (offset + LABEL_SIZE * 2 > fullBuffer.length) {
-            throw new Error('Not enough data for labels')
-        }
-
-        const leftLabelBytes = fullBuffer.slice(offset, offset + LABEL_SIZE)
-        offset += LABEL_SIZE
-        const rightLabelBytes = fullBuffer.slice(offset, offset + LABEL_SIZE)
-        offset += LABEL_SIZE
-
-        const expectedLeftLabel = bytesToHex(leftLabelBytes)
-        const expectedRightLabel = bytesToHex(rightLabelBytes)
-
-        // Recursively decode children
-        const mid = Math.floor((start + end) / 2)
-        const computedLeftLabel = await decodeNode(start, mid)
-        const computedRightLabel = await decodeNode(mid + 1, end)
-
-        // Verify labels match
-        if (computedLeftLabel !== expectedLeftLabel) {
-            const error = new Error(
-                `Left child label mismatch at [${start},${mid}]. ` +
-                `Expected: ${expectedLeftLabel}, Got: ${computedLeftLabel}`
-            )
-            if (options.onError) {
-                options.onError(error)
-            }
-            throw error
-        }
-
-        if (computedRightLabel !== expectedRightLabel) {
-            const error = new Error(
-                `Right child label mismatch at [${mid + 1},${end}]. ` +
-                `Expected: ${expectedRightLabel}, Got: ${computedRightLabel}`
-            )
-            if (options.onError) {
-                options.onError(error)
-            }
-            throw error
-        }
-
-        // Compute this node's label
-        const byteCount = (end - start + 1) * chunkSize
-        const parentLabel = await hashInner(
-            computedLeftLabel,
-            computedRightLabel,
-            byteCount
-        )
-
-        return parentLabel
-    }
-
-    // Decode the tree and verify
-    const computedRootLabel = await decodeNode(0, numChunks - 1)
-
-    // Verify root label
-    if (computedRootLabel !== rootLabel) {
-        const error = new Error(
-            `Root label mismatch. Expected: ${rootLabel}, Got: ${computedRootLabel}`
-        )
-        if (options.onError) {
-            options.onError(error)
-        }
-        throw error
-    }
-
-    // Return stream of verified chunks
     return new ReadableStream({
-        start (controller) {
-            for (const chunk of verifiedChunks) {
-                controller.enqueue(chunk)
+        async start (controller) {
+            const reader = stream.getReader()
+            let buffer = new Uint8Array(0)
+            let totalLength = 0
+            let numChunks = 0
+            let offset = 0
+
+            // Helper to ensure we have enough bytes in buffer
+            async function ensureBytes (needed:number):Promise<void> {
+                while (buffer.length - offset < needed) {
+                    const { done, value } = await reader.read()
+                    if (done) {
+                        throw new Error(
+                            `Unexpected end of stream. Needed ${needed} bytes, ` +
+                            `have ${buffer.length - offset}`
+                        )
+                    }
+                    // Append new data to buffer
+                    const newBuffer = new Uint8Array(
+                        buffer.length - offset + value.length
+                    )
+                    newBuffer.set(buffer.slice(offset), 0)
+                    newBuffer.set(value, buffer.length - offset)
+                    buffer = newBuffer
+                    offset = 0
+                }
             }
-            controller.close()
+
+            // Read bytes from buffer
+            function readBytes (count:number):Uint8Array {
+                const result = buffer.slice(offset, offset + count)
+                offset += count
+                return result
+            }
+
+            try {
+                // Read length prefix
+                await ensureBytes(8)
+                const lengthView = new DataView(
+                    buffer.buffer,
+                    buffer.byteOffset + offset
+                )
+                totalLength = Number(lengthView.getBigUint64(0, true))
+                offset += 8
+                numChunks = Math.ceil(totalLength / chunkSize)
+
+                const verifiedChunks:Uint8Array[] = new Array(numChunks)
+
+                // Recursive function to decode a node
+                async function decodeNode (
+                    start:number,
+                    end:number
+                ):Promise<string> {
+                    if (start === end) {
+                        // Leaf node - read chunk
+                        const chunkIndex = start
+                        const isLastChunk = chunkIndex === numChunks - 1
+                        const expectedSize = isLastChunk
+                            ? totalLength - (chunkIndex * chunkSize)
+                            : chunkSize
+
+                        await ensureBytes(expectedSize)
+                        const chunkData = readBytes(expectedSize)
+
+                        // Verify chunk and get its label
+                        const label = await hashChunk(chunkData)
+                        verifiedChunks[chunkIndex] = chunkData
+
+                        // Emit verified chunk immediately
+                        controller.enqueue(chunkData)
+
+                        if (options.onChunkVerified) {
+                            options.onChunkVerified(chunkIndex + 1, numChunks)
+                        }
+
+                        return label
+                    }
+
+                    // Internal node - read left and right labels
+                    await ensureBytes(LABEL_SIZE * 2)
+                    const leftLabelBytes = readBytes(LABEL_SIZE)
+                    const rightLabelBytes = readBytes(LABEL_SIZE)
+
+                    const expectedLeftLabel = bytesToHex(leftLabelBytes)
+                    const expectedRightLabel = bytesToHex(rightLabelBytes)
+
+                    // Decode left child and verify immediately
+                    const mid = Math.floor((start + end) / 2)
+                    const computedLeftLabel = await decodeNode(start, mid)
+
+                    // Verify left label immediately before continuing
+                    if (computedLeftLabel !== expectedLeftLabel) {
+                        const error = new Error(
+                            `Left child label mismatch at [${start},${mid}]. ` +
+                            `Expected: ${expectedLeftLabel}, ` +
+                            `Got: ${computedLeftLabel}`
+                        )
+                        if (options.onError) {
+                            options.onError(error)
+                        }
+                        throw error
+                    }
+
+                    // Decode right child and verify immediately
+                    const computedRightLabel = await decodeNode(mid + 1, end)
+
+                    if (computedRightLabel !== expectedRightLabel) {
+                        const error = new Error(
+                            `Right child label mismatch at [${mid + 1},${end}]. ` +
+                            `Expected: ${expectedRightLabel}, ` +
+                            `Got: ${computedRightLabel}`
+                        )
+                        if (options.onError) {
+                            options.onError(error)
+                        }
+                        throw error
+                    }
+
+                    // Compute this node's label
+                    let byteCount = 0
+                    for (let i = start; i <= end; i++) {
+                        if (i === numChunks - 1) {
+                            byteCount += totalLength - (i * chunkSize)
+                        } else {
+                            byteCount += chunkSize
+                        }
+                    }
+
+                    const parentLabel = await hashInner(
+                        computedLeftLabel,
+                        computedRightLabel,
+                        byteCount
+                    )
+
+                    return parentLabel
+                }
+
+                // Decode the tree and verify
+                const computedRootLabel = await decodeNode(0, numChunks - 1)
+
+                // Verify root label
+                if (computedRootLabel !== rootLabel) {
+                    const error = new Error(
+                        `Root label mismatch. Expected: ${rootLabel}, ` +
+                        `Got: ${computedRootLabel}`
+                    )
+                    if (options.onError) {
+                        options.onError(error)
+                    }
+                    throw error
+                }
+
+                controller.close()
+            } catch (error) {
+                if (options.onError && error instanceof Error) {
+                    options.onError(error)
+                }
+                controller.error(error)
+            } finally {
+                reader.releaseLock()
+            }
         }
     })
 }

@@ -18,6 +18,7 @@ import Debug from '@substrate-system/debug'
 import '@substrate-system/css-normalize'
 
 const debug = Debug(import.meta.env.DEV)
+debug('logging')
 
 const EM_DASH = '\u2014'
 const NBSP = '\u00A0'
@@ -316,7 +317,7 @@ async function verifyFile () {
 
         if (isSingleStream && state.babData.value) {
             // Bab mode: decode and verify single stream
-            const { rootLabel, encodedStream } = state.babData.value
+            const { rootLabel } = state.babData.value
             addLog(
                 '=== Starting Bab Stream Verification ===',
                 'info'
@@ -324,32 +325,54 @@ async function verifyFile () {
             addLog(`Expected root label: ${rootLabel}`, 'hash')
             addLog('', 'info')
 
-            // Check if user modified the textarea
+            // Get the client's base64 text and encode it to a Bab stream
+            addLog('Encoding textarea content to Bab stream...', 'info')
             const clientBase64 = state.base64Text.value
-            const originalBase64 = llamaBase64
-            const textareaModified = clientBase64 !== originalBase64
+            const encoder = new TextEncoder()
+            const clientData = encoder.encode(clientBase64)
 
-            let streamToVerify:ReadableStream<Uint8Array>
+            // Encode the data into a Bab stream
+            const encodedStream = await encodeBab(clientData, state.chunkSize.value)
 
-            if (textareaModified) {
-                // User modified the textarea - encode the modified data
-                // This will create a stream with different hashes that will fail verification
-                addLog('Textarea was modified - encoding modified data...', 'info')
-                const encoder = new TextEncoder()
-                const clientData = encoder.encode(clientBase64)
-                streamToVerify = await encodeBab(clientData, state.chunkSize.value)
-            } else {
-                // Use the stored encoded stream (simulates downloading from server)
-                addLog('Using stored encoded stream (simulating download)...', 'info')
-                streamToVerify = encodedStream
+            // Read the encoded stream into chunks to simulate download
+            const reader = encodedStream.getReader()
+            const encodedChunks:Uint8Array[] = []
+            try {
+                while (true) {
+                    const { done, value } = await reader.read()
+                    if (done) break
+                    encodedChunks.push(value)
+                }
+            } finally {
+                reader.releaseLock()
             }
 
+            addLog('Creating download stream with delays...', 'info')
+
+            // Create a throttled stream that simulates network download
+            const DOWNLOAD_CHUNK_SIZE = 16384 // 16KB chunks for download simulation
+            const streamToVerify = new ReadableStream({
+                async start (controller) {
+                    for (const chunk of encodedChunks) {
+                        // Split each chunk into smaller pieces
+                        for (let offset = 0; offset < chunk.length; offset += DOWNLOAD_CHUNK_SIZE) {
+                            const piece = chunk.slice(offset, offset + DOWNLOAD_CHUNK_SIZE)
+                            controller.enqueue(piece)
+                            // Simulate network delay
+                            await new Promise(resolve => setTimeout(resolve, 1))
+                        }
+                    }
+                    controller.close()
+                }
+            })
+
+            addLog('Starting verification...', 'info')
             addLog('', 'info')
 
             // Decode and verify the stream
             // decodeBab transforms the encoded stream back to original data
             // and throws if any hashes don't match the expected root label
-            const verifiedStream = await decodeBab(
+            const verifiedStream = decodeBab(
                 streamToVerify,
                 rootLabel,
                 state.chunkSize.value,
@@ -382,8 +405,6 @@ async function verifyFile () {
             const verifiedChunks:Uint8Array[] = []
 
             while (true) {
-                // Simulate network delay
-                await new Promise(resolve => setTimeout(resolve, 5))
                 const { done, value } = await verifiedReader.read()
                 if (done) break
                 verifiedChunks.push(value)
@@ -638,8 +659,6 @@ function handleTextareaChange (ev:Event) {
 }
 
 function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
-    debug('the route', route)
-
     if (route === '/') {
         return html`<p>
             Metadata can be generated separately from the blob content.

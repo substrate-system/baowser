@@ -32,6 +32,12 @@ pre {
     padding: 1rem;
 }
 
+.explanation {
+    & p {
+        margin: 1rem auto;
+    }
+}
+
 img {
     max-width: 100%;
 }
