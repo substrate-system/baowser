@@ -1,4 +1,5 @@
 import { blake3 } from '@nichoth/hash-wasm/blake3'
+import { bytesToHex } from './util.js'
 
 /**
  * Metadata for a single chunk
@@ -232,7 +233,7 @@ export async function verifyStream (
 }
 
 // ============================================================================
-// Bab-compatible encoding with interleaved metadata (Merkle tree approach)
+// Bab-compatible encoding with interleaved metadata (Merkle tree version)
 // ============================================================================
 
 /**
@@ -564,15 +565,6 @@ export async function decodeBab (
             controller.close()
         }
     })
-}
-
-/**
- * Convert bytes to hex string
- */
-function bytesToHex (bytes:Uint8Array):string {
-    return Array.from(bytes)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('')
 }
 
 /**
