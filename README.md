@@ -72,22 +72,32 @@ for some use cases:
 
 ### Single Stream (metadata + data)
 
-For scenarios where you want a single self-contained stream with metadata interleaved (similar to [Bab](https://worm-blossom.github.io/bab/)), use the Bab-compatible encoding:
+When you want a single self-contained stream with metadata interleaved
+(similar to [Bab](https://worm-blossom.github.io/bab/)),
+use the Bab-compatible encoding:
 
 ```js
-import { encodeBab, getBabRootLabel, decodeBab } from '@substrate-system/baowser'
+import {
+  encodeBab,
+  getBabRootLabel,
+  decodeBab
+} from '@substrate-system/baowser'
 
 // On the server: encode data into Bab format
-const data = new Uint8Array([...]) // your data
+const data = new Uint8Array([...])  // your data
 const chunkSize = 1024
 const encodedStream = await encodeBab(data, chunkSize)
 
 // Get the root label (hash) to send separately or embed
 const rootLabel = await getBabRootLabel(data, chunkSize)
 
-// On the client: decode and verify the stream
+
+// ------- client side -------
+
+
+// decode and verify the stream client-side
 const response = await fetch('/data.bab')
-const verifiedStream = decodeBab(response.body, rootLabel, {
+const verifiedStream = await decodeBab(response.body, rootLabel, chunkSize, {
   onChunkVerified: (i, total) => console.log(`${i}/${total}`),
   onError: (err) => console.error('Verification failed:', err)
 })
@@ -102,9 +112,15 @@ while (true) {
 }
 ```
 
-**Note:** The Bab encoding uses a Merkle tree structure where hash labels are interleaved with data chunks. The current `decodeBab` implementation is simplified and doesn't perform full incremental verification yet.
+#### Encoding Format
 
-### Encode data (separate metadata)
+The Bab encoding uses a Merkle tree structure where hash labels
+are interleaved with data chunks. The decoder performs full verification by
+recursively verifying each node's label matches the computed hash from
+its children, ensuring the entire tree structure is valid.
+
+
+### Separate Metadata
 
 First, encode your data to generate chunk metadata. This would happen
 on the machine that is providing the file (a server).
@@ -112,7 +128,7 @@ on the machine that is providing the file (a server).
 ```js
 import { encode } from '@substrate-system/baowser'
 
-const data = new Uint8Array([...]) // your data
+const data = new Uint8Array([...])  // your data
 const chunkSize = 1024
 
 const metadata = await encode(data, chunkSize)
@@ -126,7 +142,7 @@ const metadata = await encode(data, chunkSize)
 
 ### Verify data
 
-Use the `createVerifier` to create a
+Use the function `createVerifier` to create a
 [`TransformStream`](https://developer.mozilla.org/en-US/docs/Web/API/TransformStream)
 and verify the stream as it downloads.
 
@@ -136,7 +152,7 @@ and verify the stream as it downloads.
 1. The onError callback is invoked (if you provided one) with the error
 2. An error is thrown from the stream with a message like:
    Chunk 2 hash mismatch. Expected: abc123..., Got: def456...
-3. This causes reader.read() to reject, triggering the catch block
+3. This causes `reader.read()` to reject, triggering the catch block
 
 ```js
 import { createVerifier } from '@substrate-system/baowser'
@@ -177,7 +193,7 @@ try {
 }
 
 // stream is complete now
-// Combine chunks into complete data
+// combine chunks into complete data
 const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
 const completeData = new Uint8Array(totalLength)
 let offset = 0
@@ -186,7 +202,8 @@ for (const chunk of chunks) {
   offset += chunk.length
 }
 
-// Now use the verified data - create a Blob and display it
+// Now use the verified data.
+// Create a Blob and add it to the DOM.
 const blob = new Blob([completeData], { type: 'image/jpeg' })
 const blobUrl = URL.createObjectURL(blob)
 
@@ -245,4 +262,4 @@ img.onload = () => URL.revokeObjectURL(blobUrl)
 
 * [nichoth/hash-wasm](https://github.com/nichoth/hash-wasm) &mdash; a fork of
   [Daninet/hash-wasm](https://github.com/Daninet/hash-wasm). It doesn't add
-  or change anything, just keeping
+  or change anything.

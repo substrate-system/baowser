@@ -390,6 +390,114 @@ test('getBabRootLabel returns root hash', async t => {
     t.equal(typeof rootLabel, 'string', 'root label should be a string')
 })
 
+test('encodeBab and decodeBab round-trip verification', async t => {
+    const data = generateTestData(8 * 1024)  // 8KB test file
+    const chunkSize = 2 * 1024  // 2KB chunks
+
+    const { encodeBab, getBabRootLabel, decodeBab } = await import('../src/index.js')
+
+    // Encode data
+    const encodedStream = await encodeBab(data, chunkSize)
+    const rootLabel = await getBabRootLabel(data, chunkSize)
+
+    // Decode and verify
+    const verifiedStream = await decodeBab(encodedStream, rootLabel, chunkSize, {
+        onChunkVerified: (i, total) => {
+            t.ok(i > 0, 'chunk index should be positive')
+            t.ok(i <= total, 'chunk index should not exceed total')
+        }
+    })
+
+    // Read verified data
+    const reader = verifiedStream.getReader()
+    const chunks:Uint8Array[] = []
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            chunks.push(value)
+        }
+    } finally {
+        reader.releaseLock()
+    }
+
+    // Combine chunks
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    const result = new Uint8Array(totalLength)
+    let offset = 0
+    for (const chunk of chunks) {
+        result.set(chunk, offset)
+        offset += chunk.length
+    }
+
+    // Verify data matches original
+    t.equal(result.length, data.length, 'decoded data length should match')
+    t.ok(
+        result.every((byte, i) => byte === data[i]),
+        'decoded data should match original'
+    )
+})
+
+test('decodeBab detects corrupted data', async t => {
+    const data = generateTestData(6 * 1024)  // 6KB
+    const chunkSize = 2 * 1024  // 2KB chunks
+
+    const { encodeBab, getBabRootLabel, decodeBab } = await import('../src/index.js')
+
+    // Encode data
+    const encodedStream = await encodeBab(data, chunkSize)
+    const rootLabel = await getBabRootLabel(data, chunkSize)
+
+    // Read and corrupt the encoded stream
+    const reader = encodedStream.getReader()
+    const encodedChunks:Uint8Array[] = []
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            encodedChunks.push(value)
+        }
+    } finally {
+        reader.releaseLock()
+    }
+
+    // Combine and corrupt
+    const totalBytes = encodedChunks.reduce((sum, c) => sum + c.length, 0)
+    const corruptedBuffer = new Uint8Array(totalBytes)
+    let writeOffset = 0
+    for (const chunk of encodedChunks) {
+        corruptedBuffer.set(chunk, writeOffset)
+        writeOffset += chunk.length
+    }
+
+    // Corrupt a byte in the data section (after length prefix and labels)
+    const corruptIndex = Math.floor(corruptedBuffer.length / 2)
+    corruptedBuffer[corruptIndex] = corruptedBuffer[corruptIndex] ^ 0xFF
+
+    // Create stream from corrupted data
+    const corruptedStream = new ReadableStream({
+        start (controller) {
+            controller.enqueue(corruptedBuffer)
+            controller.close()
+        }
+    })
+
+    // Attempt to decode - should fail
+    try {
+        await decodeBab(corruptedStream, rootLabel, chunkSize)
+        t.fail('should have thrown an error for corrupted data')
+    } catch (error) {
+        t.ok(error instanceof Error, 'should throw an Error')
+        if (error instanceof Error) {
+            t.ok(
+                error.message.includes('mismatch') || error.message.includes('Not enough'),
+                'error should mention verification failure'
+            )
+        }
+    }
+})
+
 // Generate test data
 function generateTestData (size:number):Uint8Array {
     const data = new Uint8Array(size)

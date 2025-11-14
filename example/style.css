@@ -35,6 +35,28 @@ img {
     max-width: 100%;
 }
 
+nav {
+    & ul {
+        list-style: none;
+        display: flex;
+        gap: 1rem;
+        justify-content: space-around;
+
+        & a {
+            transition: all 0.2s;
+            text-underline-offset: 1px;
+            text-decoration-thickness: 1px;
+        }
+
+        & li.active {
+            & a {
+                text-decoration-thickness: 3px;
+                text-underline-offset: 4px;
+            }
+        }
+    }
+}
+
 .container {
     max-width: 60rem;
     margin: 0 auto;

@@ -1,5 +1,6 @@
 import { type FunctionComponent, render } from 'preact'
 import { html } from 'htm/preact'
+import Route from 'route-event'
 import { useRef, useEffect } from 'preact/hooks'
 import { blake3 } from '@nichoth/hash-wasm'
 import { type Signal, signal, useComputed } from '@preact/signals'
@@ -31,7 +32,9 @@ const state:{
     isEncoding:Signal<boolean>;
     isVerifying:Signal<boolean>;
     base64Text:Signal<string>;
+    path:Signal<string>;
 } = {
+    path: signal('/'),
     chunkSize: signal(1024),
     encodedData: signal(null),
     logs: signal([]),
@@ -40,6 +43,35 @@ const state:{
     isVerifying: signal(false),
     base64Text: signal(llamaBase64),
 }
+
+const onRoute = Route()
+
+/**
+ * Client-side routing
+ */
+onRoute((path, data) => {
+    state.path.value = path
+
+    // handle scroll state like a web browser
+    // (restore scroll position on back/forward)
+    if (data.popstate) {
+        return window.scrollTo(data.scrollX, data.scrollY)
+    }
+
+    // if this was a link click (not back button), then scroll to top
+    window.scrollTo(0, 0)
+})
+
+const routes = [
+    {
+        path: '/',
+        text: 'External Metadata'
+    },
+    {
+        path: '/single-stream',
+        text: 'Singal Stream'
+    }
+]
 
 const Example:FunctionComponent = function () {
     const logContainerRef = useRef<HTMLDivElement>(null)
@@ -72,7 +104,7 @@ const Example:FunctionComponent = function () {
 
         <p>
             Below is the image we are transferring. On the right is the same
-            image as <code>base64-encoded</code> text.
+            image, <code>base64-encoded</code> to a string.
         </p>
 
         <p>
@@ -90,6 +122,16 @@ const Example:FunctionComponent = function () {
             "pipe" it through this module to verify the download is correct as
             it is transfering.
         </p>
+
+        <nav class="routes">
+            <ul>
+                ${routes.map(r => {
+                    return html`<li class="nav${r.path === state.path.value ? ' active' : ''}">
+                        <a href="${r.path}">${r.text}</a>
+                    </li>`
+                })}
+            </ul>
+        </nav>
 
         <div class="content-preview">
             <div class="preview-item">

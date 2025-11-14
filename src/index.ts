@@ -340,13 +340,14 @@ async function buildMerkleTree (
 }
 
 /**
- * Encode data into Bab format with interleaved labels and chunks
+ * Encode data into bab format with interleaved labels and chunks
  * Returns a ReadableStream that outputs: [length] [labels...] [chunks...]
  * in depth-first traversal order
  *
  * @param data - The data to encode
  * @param chunkSize - Size of each chunk in bytes
- * @returns A ReadableStream containing the encoded data with interleaved metadata
+ * @returns A ReadableStream containing the encoded data with
+ *   interleaved metadata
  */
 export async function encodeBab (
     data:Uint8Array,
@@ -404,77 +405,174 @@ async function emitNode (
 }
 
 /**
- * Decode and verify a Bab-encoded stream
+ * Decode and verify a Bab-encoded stream with full Merkle tree verification
  * Returns a ReadableStream of verified data chunks
  *
  * @param stream - The encoded stream to decode
  * @param rootLabel - The expected root hash for verification
+ * @param chunkSize - The chunk size used during encoding
  * @param options - Optional callbacks for verification events
  * @returns A ReadableStream of verified data chunks
  */
-export function decodeBab (
+export async function decodeBab (
     stream:ReadableStream<Uint8Array>,
     rootLabel:string,
+    chunkSize:number,
     options:VerifierOptions = {}
-):ReadableStream<Uint8Array> {
+):Promise<ReadableStream<Uint8Array>> {
     const reader = stream.getReader()
-    let buffer = new Uint8Array(0)
-    let lengthRead = false
+    const LABEL_SIZE = 32  // BLAKE3 produces 32-byte hashes
 
-    return new ReadableStream({
-        async pull (controller) {
-            try {
-                // Read length prefix if not yet read
-                if (!lengthRead) {
-                    while (buffer.length < 8) {
-                        const { done, value } = await reader.read()
-                        if (done) {
-                            throw new Error('Stream ended before length could be read')
-                        }
-                        const newBuffer = new Uint8Array(buffer.length + value.length)
-                        newBuffer.set(buffer)
-                        newBuffer.set(value, buffer.length)
-                        buffer = newBuffer
-                    }
+    // Read and buffer entire stream first (simplification for now)
+    const chunks:Uint8Array[] = []
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            chunks.push(value)
+        }
+    } finally {
+        reader.releaseLock()
+    }
 
-                    const view = new DataView(buffer.buffer, buffer.byteOffset)
-                    const _totalLength = Number(view.getBigUint64(0, true))
-                    buffer = buffer.slice(8)
-                    lengthRead = true
-                }
+    // Combine into single buffer
+    const totalBytes = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    const fullBuffer = new Uint8Array(totalBytes)
+    let writeOffset = 0
+    for (const chunk of chunks) {
+        fullBuffer.set(chunk, writeOffset)
+        writeOffset += chunk.length
+    }
 
-                // Read and verify data
-                // NOTE: This is a simplified implementation
-                // Full Bab decoding requires parsing the Merkle tree structure
-                // and verifying labels incrementally as they arrive
-                const { done, value } = await reader.read()
-                if (done) {
-                    // TODO: Verify final rootLabel matches
-                    controller.close()
-                    return
-                }
+    // Parse the stream
+    let offset = 0
 
-                // Add to buffer
-                const newBuffer = new Uint8Array(buffer.length + value.length)
-                newBuffer.set(buffer)
-                newBuffer.set(value, buffer.length)
-                buffer = newBuffer
+    // Read length prefix
+    if (fullBuffer.length < 8) {
+        throw new Error('Stream too short for length prefix')
+    }
+    const view = new DataView(fullBuffer.buffer, fullBuffer.byteOffset)
+    const totalLength = Number(view.getBigUint64(0, true))
+    offset += 8
 
-                // TODO: Implement full Merkle tree verification
-                // This requires:
-                // 1. Parsing labels from the stream
-                // 2. Reconstructing tree structure
-                // 3. Verifying computed labels match received labels
-                // 4. Only outputting verified chunks
-                controller.enqueue(value)
-            } catch (error) {
-                if (options.onError && error instanceof Error) {
-                    options.onError(error)
-                }
-                throw error
+    const numChunks = Math.ceil(totalLength / chunkSize)
+    const verifiedChunks:Uint8Array[] = []
+
+    // Recursive function to decode a node
+    async function decodeNode (
+        start:number,
+        end:number
+    ):Promise<string> {
+        if (start === end) {
+            // Leaf node - read chunk
+            const chunkIndex = start
+            const isLastChunk = chunkIndex === numChunks - 1
+            const expectedSize = isLastChunk
+                ? totalLength - (chunkIndex * chunkSize)
+                : chunkSize
+
+            if (offset + expectedSize > fullBuffer.length) {
+                throw new Error(`Not enough data for chunk ${chunkIndex}`)
             }
+
+            const chunkData = fullBuffer.slice(offset, offset + expectedSize)
+            offset += expectedSize
+
+            // Verify chunk and get its label
+            const label = await hashChunk(chunkData)
+            verifiedChunks[chunkIndex] = chunkData
+
+            if (options.onChunkVerified) {
+                options.onChunkVerified(chunkIndex + 1, numChunks)
+            }
+
+            return label
+        }
+
+        // Internal node - read left and right labels first
+        if (offset + LABEL_SIZE * 2 > fullBuffer.length) {
+            throw new Error('Not enough data for labels')
+        }
+
+        const leftLabelBytes = fullBuffer.slice(offset, offset + LABEL_SIZE)
+        offset += LABEL_SIZE
+        const rightLabelBytes = fullBuffer.slice(offset, offset + LABEL_SIZE)
+        offset += LABEL_SIZE
+
+        const expectedLeftLabel = bytesToHex(leftLabelBytes)
+        const expectedRightLabel = bytesToHex(rightLabelBytes)
+
+        // Recursively decode children
+        const mid = Math.floor((start + end) / 2)
+        const computedLeftLabel = await decodeNode(start, mid)
+        const computedRightLabel = await decodeNode(mid + 1, end)
+
+        // Verify labels match
+        if (computedLeftLabel !== expectedLeftLabel) {
+            const error = new Error(
+                `Left child label mismatch at [${start},${mid}]. ` +
+                `Expected: ${expectedLeftLabel}, Got: ${computedLeftLabel}`
+            )
+            if (options.onError) {
+                options.onError(error)
+            }
+            throw error
+        }
+
+        if (computedRightLabel !== expectedRightLabel) {
+            const error = new Error(
+                `Right child label mismatch at [${mid + 1},${end}]. ` +
+                `Expected: ${expectedRightLabel}, Got: ${computedRightLabel}`
+            )
+            if (options.onError) {
+                options.onError(error)
+            }
+            throw error
+        }
+
+        // Compute this node's label
+        const byteCount = (end - start + 1) * chunkSize
+        const parentLabel = await hashInner(
+            computedLeftLabel,
+            computedRightLabel,
+            byteCount
+        )
+
+        return parentLabel
+    }
+
+    // Decode the tree and verify
+    const computedRootLabel = await decodeNode(0, numChunks - 1)
+
+    // Verify root label
+    if (computedRootLabel !== rootLabel) {
+        const error = new Error(
+            `Root label mismatch. Expected: ${rootLabel}, Got: ${computedRootLabel}`
+        )
+        if (options.onError) {
+            options.onError(error)
+        }
+        throw error
+    }
+
+    // Return stream of verified chunks
+    return new ReadableStream({
+        start (controller) {
+            for (const chunk of verifiedChunks) {
+                controller.enqueue(chunk)
+            }
+            controller.close()
         }
     })
+}
+
+/**
+ * Convert bytes to hex string
+ */
+function bytesToHex (bytes:Uint8Array):string {
+    return Array.from(bytes)
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('')
 }
 
 /**

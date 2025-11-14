@@ -68,6 +68,7 @@
     "markdown-toc": "^1.2.0",
     "postcss-nesting": "^13.0.2",
     "preact": "^10.27.0",
+    "route-event": "^7.4.0",
     "tap-spec": "^5.0.0",
     "typedoc": "^0.28.9",
     "typescript": "^5.9.2",
