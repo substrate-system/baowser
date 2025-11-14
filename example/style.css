@@ -27,6 +27,10 @@ body {
     }
 }
 
+hr {
+    margin: 2rem 0;
+}
+
 pre {
     background-color: var(--gray-light);
     padding: 1rem;
