@@ -77,9 +77,6 @@ onRoute((path, data) => {
     if (data.popstate) {
         return window.scrollTo(data.scrollX, data.scrollY)
     }
-
-    // if this was a link click (not back button), then scroll to top
-    window.scrollTo(0, 0)
 })
 
 const routes = [
