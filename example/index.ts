@@ -10,7 +10,6 @@ import {
     encode,
     createVerifier,
     createEncoder,
-    createDecoder,
     getBabRootLabel,
     type EncodedMetadata
 } from '../src/index'
@@ -370,9 +369,9 @@ async function verifyFile () {
             addLog('', 'info')
 
             // Decode and verify the stream
-            // createDecoder transforms the encoded stream back to original data
+            // createVerifier transforms the encoded stream back to original data
             // and throws if any hashes don't match the expected root label
-            const verifiedStream = createDecoder(
+            const verifiedStream = createVerifier(
                 streamToVerify,
                 rootLabel,
                 state.chunkSize.value,
@@ -399,7 +398,7 @@ async function verifyFile () {
 
             // Read verified chunks from the decoded stream
             // NOTE: If a hash mismatch is detected during Merkle tree verification,
-            // createDecoder will throw an error, aborting the stream processing
+            // createVerifier will throw an error, aborting the stream processing
             // immediately. No more chunks will be processed.
             const verifiedReader = verifiedStream.getReader()
             const verifiedChunks:Uint8Array[] = []
@@ -680,7 +679,7 @@ function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
             just needs the root hash.
         </p>
         <p>
-            The function <code>createDecoder</code> will return a new stream of
+            The function <code>createVerifier</code> will return a new stream of
             just the content (no metadata), and will throw an error if any
             of the hashes are bad.
         </p>

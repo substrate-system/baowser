@@ -70,14 +70,9 @@ export async function encode (
 }
 
 /**
- * Create a TransformStream that verifies chunks against expected hashes
- * as data flows through.
- *
- * @param metadata - The metadata containing expected hashes
- * @param options - Optional callbacks for verification events
- * @returns A TransformStream that verifies chunks
+ * Internal function for simple chunk verification
  */
-export function createVerifier (
+function createSimpleVerifier (
     metadata:EncodedMetadata,
     options:VerifierOptions = {}
 ):TransformStream<Uint8Array, Uint8Array> {
@@ -186,20 +181,132 @@ export function createVerifier (
 }
 
 /**
- * Verify a complete stream, return a promise.
+ * Creates a verifier stream for chunk-by-chunk verification with explicit metadata
+ *
+ * @param metadata - The metadata containing expected hashes
+ * @param options - Optional callbacks for verification events
+ * @returns A TransformStream that verifies chunks
+ */
+export function createVerifier (
+    metadata:EncodedMetadata,
+    options?:VerifierOptions
+):TransformStream<Uint8Array, Uint8Array>
+
+/**
+ * Creates a verifier stream that decodes Bab-encoded data with interleaved metadata
+ *
+ * @param stream - The encoded stream to decode
+ * @param rootLabel - The expected root hash for verification
+ * @param chunkSize - The chunk size used during encoding
+ * @param options - Optional callbacks for verification events
+ * @returns A ReadableStream of verified data chunks
+ */
+export function createVerifier (
+    stream:ReadableStream<Uint8Array>,
+    rootLabel:string,
+    chunkSize:number,
+    options?:VerifierOptions
+):ReadableStream<Uint8Array>
+
+export function createVerifier (
+    metadataOrStream:EncodedMetadata | ReadableStream<Uint8Array>,
+    optionsOrRootLabel?:VerifierOptions | string,
+    chunkSize?:number,
+    options?:VerifierOptions
+):TransformStream<Uint8Array, Uint8Array> | ReadableStream<Uint8Array> {
+    // Case 1: Simple chunk verification (metadata provided)
+    if (!('getReader' in metadataOrStream)) {
+        const metadata = metadataOrStream as EncodedMetadata
+        const opts = (optionsOrRootLabel as VerifierOptions | undefined) || {}
+        return createSimpleVerifier(metadata, opts)
+    }
+
+    // Case 2: Bab decoding (stream + rootLabel + chunkSize)
+    const stream = metadataOrStream as ReadableStream<Uint8Array>
+    const rootLabel = optionsOrRootLabel as string
+    return decodeBab(stream, rootLabel, chunkSize!, options)
+}
+
+/**
+ * Verifies a stream and returns the complete verified data
  *
  * @param stream - The ReadableStream to verify
  * @param metadata - The metadata containing expected hashes
  * @param options - Optional callbacks for verification events
- * @throws {Error} If the hash doesn't match the data
  * @returns Promise resolving to the complete verified data
  */
-export async function verifyStream (
+export async function verify (
     stream:ReadableStream<Uint8Array>,
     metadata:EncodedMetadata,
-    options:VerifierOptions = {}
+    options?:VerifierOptions
+):Promise<Uint8Array>
+
+/**
+ * Verifies a Bab-encoded stream with interleaved metadata
+ *
+ * @param stream - The encoded stream to decode and verify
+ * @param rootLabel - The expected root hash for verification
+ * @param chunkSize - The chunk size used during encoding
+ * @param options - Optional callbacks for verification events
+ * @returns Promise resolving to the complete verified data
+ */
+export async function verify (
+    stream:ReadableStream<Uint8Array>,
+    rootLabel:string,
+    chunkSize:number,
+    options?:VerifierOptions
+):Promise<Uint8Array>
+
+export async function verify (
+    stream:ReadableStream<Uint8Array>,
+    metadataOrRootLabel:EncodedMetadata | string,
+    optionsOrChunkSize?:VerifierOptions | number,
+    options?:VerifierOptions
 ):Promise<Uint8Array> {
-    const verifiedStream = stream.pipeThrough(createVerifier(metadata, options))
+    // Case 1: Simple verification with metadata
+    if (typeof metadataOrRootLabel !== 'string') {
+        const metadata = metadataOrRootLabel as EncodedMetadata
+        const opts = (optionsOrChunkSize as VerifierOptions | undefined) || {}
+        const verifiedStream = stream.pipeThrough(createSimpleVerifier(metadata, opts))
+        const reader = verifiedStream.getReader()
+        const chunks:Uint8Array[] = []
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                chunks.push(value)
+            }
+        } finally {
+            reader.releaseLock()
+        }
+
+        // Combine all chunks
+        const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+        const result = new Uint8Array(totalLength)
+        let offset = 0
+        for (const chunk of chunks) {
+            result.set(chunk, offset)
+            offset += chunk.length
+        }
+
+        // Final verification: check root hash
+        const computedRootHash = await blake3(result)
+        if (computedRootHash !== metadata.rootHash) {
+            throw new Error(
+                `Root hash mismatch. Expected: ${metadata.rootHash}, ` +
+                `Got: ${computedRootHash}`
+            )
+        }
+
+        return result
+    }
+
+    // Case 2: Bab decoding with interleaved metadata
+    const rootLabel = metadataOrRootLabel as string
+    const chunkSize = optionsOrChunkSize as number
+    const opts = options || {}
+    const verifiedStream = decodeBab(stream, rootLabel, chunkSize, opts)
     const reader = verifiedStream.getReader()
     const chunks:Uint8Array[] = []
 
@@ -220,15 +327,6 @@ export async function verifyStream (
     for (const chunk of chunks) {
         result.set(chunk, offset)
         offset += chunk.length
-    }
-
-    // Final verification: check root hash
-    const computedRootHash = await blake3(result)
-    if (computedRootHash !== metadata.rootHash) {
-        throw new Error(
-            `Root hash mismatch. Expected: ${metadata.rootHash}, ` +
-            `Got: ${computedRootHash}`
-        )
     }
 
     return result
@@ -420,16 +518,10 @@ async function * emitNodeGenerator (
 }
 
 /**
- * Decode and verify a Bab-encoded stream with full Merkle tree verification
+ * Internal function to decode and verify a Bab-encoded stream with full Merkle tree verification
  * Returns a ReadableStream of verified data chunks
- *
- * @param stream - The encoded stream to decode
- * @param rootLabel - The expected root hash for verification
- * @param chunkSize - The chunk size used during encoding
- * @param options - Optional callbacks for verification events
- * @returns A ReadableStream of verified data chunks
  */
-export function createDecoder (
+function decodeBab (
     stream:ReadableStream<Uint8Array>,
     rootLabel:string,
     chunkSize:number,

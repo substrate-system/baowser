@@ -1,11 +1,10 @@
 import { test } from '@substrate-system/tapzero'
 import {
     encode,
-    verifyStream,
+    verify,
     createVerifier,
     createEncoder,
-    getBabRootLabel,
-    createDecoder
+    getBabRootLabel
 } from '../src/index.js'
 
 const CHUNK_SIZE = 64 * 1024  // 64KB chunks
@@ -40,7 +39,7 @@ test('verify valid data', async t => {
     })
 
     // Verify the stream
-    const verifiedData = await verifyStream(stream, metadata)
+    const verifiedData = await verify(stream, metadata)
 
     t.equal(verifiedData.length, data.length, 'verified data length should match')
     t.ok(
@@ -68,7 +67,7 @@ test('detect corruption', async t => {
 
     // Verification should fail
     try {
-        await verifyStream(stream, metadata)
+        await verify(stream, metadata)
         t.fail('should have thrown an error for corrupted data')
     } catch (error) {
         t.ok(error instanceof Error, 'should throw an Error')
@@ -98,7 +97,7 @@ test('detect corruption at the beginning of file', async t => {
     })
 
     try {
-        await verifyStream(stream, metadata)
+        await verify(stream, metadata)
         t.fail('should have thrown an error for corrupted data')
     } catch (error) {
         t.ok(error instanceof Error, 'should throw an Error')
@@ -129,7 +128,7 @@ test('should detect corruption at the end of file', async t => {
     })
 
     try {
-        await verifyStream(stream, metadata)
+        await verify(stream, metadata)
         t.fail('should have thrown an error for corrupted data')
     } catch (error) {
         t.ok(error instanceof Error, 'should throw an Error')
@@ -155,7 +154,7 @@ test('track chunk verification progress', async t => {
         }
     })
 
-    await verifyStream(stream, metadata, {
+    await verify(stream, metadata, {
         onChunkVerified: (chunkIndex, totalChunks) => {
             verifiedChunks.push(chunkIndex)
             t.ok(chunkIndex <= totalChunks, 'chunk index should be valid')
@@ -197,14 +196,14 @@ test('invoke error callback and throw on corruption', async t => {
     })
 
     try {
-        await verifyStream(stream, metadata, {
+        await verify(stream, metadata, {
             onError: (error) => {
                 errorCallbackInvoked = true
                 t.ok(error instanceof Error,
                     'error callback should receive Error instance')
             }
         })
-        t.fail('verifyStream should have thrown an error for corrupted data')
+        t.fail('verify should have thrown an error for corrupted data')
     } catch (error) {
         t.ok(error instanceof Error, 'should throw an Error instance')
         t.ok(errorCallbackInvoked, 'onError callback should have been invoked')
@@ -406,7 +405,7 @@ test('encodeBab and decodeBab round-trip verification', async t => {
     const rootLabel = await getBabRootLabel(data, chunkSize)
 
     // Decode and verify
-    const verifiedStream = await createDecoder(
+    const verifiedStream = await createVerifier(
         encodedStream,
         rootLabel,
         chunkSize,
@@ -460,7 +459,7 @@ test('encodeBab and decodeBab with realistic file size (llama image)', async t =
     const rootLabel = await getBabRootLabel(data, chunkSize)
 
     // Decode and verify
-    const verifiedStream = await createDecoder(encodedStream, rootLabel, chunkSize)
+    const verifiedStream = await createVerifier(encodedStream, rootLabel, chunkSize)
 
     // Read verified data
     const reader = verifiedStream.getReader()
@@ -536,7 +535,7 @@ test('decodeBab detects corrupted data', async t => {
     })
 
     // Attempt to decode - should fail during stream consumption
-    const verifiedStream = createDecoder(corruptedStream, rootLabel, chunkSize)
+    const verifiedStream = createVerifier(corruptedStream, rootLabel, chunkSize)
     const verifiedReader = verifiedStream.getReader()
 
     try {
@@ -625,7 +624,7 @@ test('detect corruption early without reading the entire stream', async t => {
     })
 
     // Try to decode
-    const verifiedStream = createDecoder(retrackingStream, rootLabel, chunkSize)
+    const verifiedStream = createVerifier(retrackingStream, rootLabel, chunkSize)
     const verifiedReader = verifiedStream.getReader()
 
     try {
