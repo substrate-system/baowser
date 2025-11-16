@@ -9,8 +9,8 @@ import llamaBase64 from './llama.jpg.base64'
 import {
     encode,
     createVerifier,
-    encodeBab,
-    decodeBab,
+    createEncoder,
+    createDecoder,
     getBabRootLabel,
     type EncodedMetadata
 } from '../src/index'
@@ -143,6 +143,8 @@ const Example:FunctionComponent = function () {
             it is streaming.
         </p>
 
+        <hr />
+
         <nav class="routes">
             <ul>
                 ${routes.map(r => {
@@ -221,11 +223,6 @@ const Example:FunctionComponent = function () {
                     All verification data is included in the stream.
                     You only need to learn the root hash, and then you can
                     veryify the chunks as they arrive.
-                </p>
-                <p>
-                    So if there is some trust between Alice and Bob, then Alice
-                    can learn the root hash from Bob, but download the chunks
-                    from anywhere.
                 </p>
                 ` :
                 html`<p>
@@ -332,7 +329,10 @@ async function verifyFile () {
             const clientData = encoder.encode(clientBase64)
 
             // Encode the data into a Bab stream
-            const encodedStream = await encodeBab(clientData, state.chunkSize.value)
+            const encodedStream = await createEncoder(
+                clientData,
+                state.chunkSize.value
+            )
 
             // Read the encoded stream into chunks to simulate download
             const reader = encodedStream.getReader()
@@ -370,9 +370,9 @@ async function verifyFile () {
             addLog('', 'info')
 
             // Decode and verify the stream
-            // decodeBab transforms the encoded stream back to original data
+            // createDecoder transforms the encoded stream back to original data
             // and throws if any hashes don't match the expected root label
-            const verifiedStream = decodeBab(
+            const verifiedStream = createDecoder(
                 streamToVerify,
                 rootLabel,
                 state.chunkSize.value,
@@ -399,8 +399,8 @@ async function verifyFile () {
 
             // Read verified chunks from the decoded stream
             // NOTE: If a hash mismatch is detected during Merkle tree verification,
-            // decodeBab will throw an error, aborting the stream processing immediately.
-            // No more chunks will be processed.
+            // createDecoder will throw an error, aborting the stream processing
+            // immediately. No more chunks will be processed.
             const verifiedReader = verifiedStream.getReader()
             const verifiedChunks:Uint8Array[] = []
 
@@ -604,7 +604,7 @@ async function encodeFile () {
                 serverData,
                 state.chunkSize.value
             )
-            const encodedStream = await encodeBab(
+            const encodedStream = await createEncoder(
                 serverData,
                 state.chunkSize.value
             )
@@ -674,13 +674,13 @@ function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
     if (route.includes('single-stream')) {
         return html`<p>
             Get a single stream that includes metadata and
-            blob content mixed together. Blob source can publish just the root
-            hash ahead of time, and then the downloader can verify the
-            data incrementally, without waiting for the full download. They
-            just need to root hash.
+            blob content mixed together. Alice can publish just the root
+            hash ahead of time, and then Bob can verify the
+            data incrementally, without waiting for the full download. He
+            just needs the root hash.
         </p>
         <p>
-            The function <code>decodeBab</code> will return a new stream of
+            The function <code>createDecoder</code> will return a new stream of
             just the content (no metadata), and will throw an error if any
             of the hashes are bad.
         </p>

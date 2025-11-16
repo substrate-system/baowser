@@ -27,6 +27,7 @@ export interface VerifierOptions {
      * Callback invoked when a chunk is successfully verified
      */
     onChunkVerified?:(chunkIndex:number, totalChunks:number) => void
+
     /**
      * Callback invoked when verification fails
      */
@@ -69,8 +70,8 @@ export async function encode (
 }
 
 /**
- * Creates a TransformStream that verifies chunks against expected hashes
- * as data flows through
+ * Create a TransformStream that verifies chunks against expected hashes
+ * as data flows through.
  *
  * @param metadata - The metadata containing expected hashes
  * @param options - Optional callbacks for verification events
@@ -185,11 +186,12 @@ export function createVerifier (
 }
 
 /**
- * Convenience function to verify a complete stream and collect all data
+ * Verify a complete stream, return a promise.
  *
  * @param stream - The ReadableStream to verify
  * @param metadata - The metadata containing expected hashes
  * @param options - Optional callbacks for verification events
+ * @throws {Error} If the hash doesn't match the data
  * @returns Promise resolving to the complete verified data
  */
 export async function verifyStream (
@@ -252,7 +254,7 @@ interface MerkleNode {
  * Hash a leaf node (chunk of data)
  */
 async function hashChunk (data:Uint8Array):Promise<string> {
-    return blake3(data)
+    return await blake3(data)
 }
 
 /**
@@ -346,14 +348,14 @@ async function buildMerkleTree (
 /**
  * Encode data into bab format with interleaved labels and chunks
  * Returns a ReadableStream that outputs: [length] [labels...] [chunks...]
- * in depth-first traversal order
+ * in depth-first traversal order.
  *
  * @param data - The data to encode
  * @param chunkSize - Size of each chunk in bytes
  * @returns A ReadableStream containing the encoded data with
  *   interleaved metadata
  */
-export async function encodeBab (
+export async function createEncoder (
     data:Uint8Array,
     chunkSize:number
 ):Promise<ReadableStream<Uint8Array>> {
@@ -427,7 +429,7 @@ async function * emitNodeGenerator (
  * @param options - Optional callbacks for verification events
  * @returns A ReadableStream of verified data chunks
  */
-export function decodeBab (
+export function createDecoder (
     stream:ReadableStream<Uint8Array>,
     rootLabel:string,
     chunkSize:number,

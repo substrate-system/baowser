@@ -3,9 +3,9 @@ import {
     encode,
     verifyStream,
     createVerifier,
-    encodeBab,
+    createEncoder,
     getBabRootLabel,
-    decodeBab
+    createDecoder
 } from '../src/index.js'
 
 const CHUNK_SIZE = 64 * 1024  // 64KB chunks
@@ -362,7 +362,7 @@ test('encodeBab creates self-contained stream with metadata', async t => {
     const chunkSize = 2 * 1024  // 2KB chunks
 
     // Encode data into Bab format
-    const encodedStream = await encodeBab(data, chunkSize)
+    const encodedStream = await createEncoder(data, chunkSize)
 
     // Read the encoded stream
     const reader = encodedStream.getReader()
@@ -402,16 +402,21 @@ test('encodeBab and decodeBab round-trip verification', async t => {
     const chunkSize = 2 * 1024  // 2KB chunks
 
     // Encode data
-    const encodedStream = await encodeBab(data, chunkSize)
+    const encodedStream = await createEncoder(data, chunkSize)
     const rootLabel = await getBabRootLabel(data, chunkSize)
 
     // Decode and verify
-    const verifiedStream = await decodeBab(encodedStream, rootLabel, chunkSize, {
-        onChunkVerified: (i, total) => {
-            t.ok(i > 0, 'chunk index should be positive')
-            t.ok(i <= total, 'chunk index should not exceed total')
+    const verifiedStream = await createDecoder(
+        encodedStream,
+        rootLabel,
+        chunkSize,
+        {
+            onChunkVerified: (i, total) => {
+                t.ok(i > 0, 'chunk index should be positive')
+                t.ok(i <= total, 'chunk index should not exceed total')
+            }
         }
-    })
+    )
 
     // Read verified data
     const reader = verifiedStream.getReader()
@@ -451,11 +456,11 @@ test('encodeBab and decodeBab with realistic file size (llama image)', async t =
     const chunkSize = 1024
 
     // Encode data
-    const encodedStream = await encodeBab(data, chunkSize)
+    const encodedStream = await createEncoder(data, chunkSize)
     const rootLabel = await getBabRootLabel(data, chunkSize)
 
     // Decode and verify
-    const verifiedStream = await decodeBab(encodedStream, rootLabel, chunkSize)
+    const verifiedStream = await createDecoder(encodedStream, rootLabel, chunkSize)
 
     // Read verified data
     const reader = verifiedStream.getReader()
@@ -493,7 +498,7 @@ test('decodeBab detects corrupted data', async t => {
     const chunkSize = 2 * 1024  // 2KB chunks
 
     // Encode data
-    const encodedStream = await encodeBab(data, chunkSize)
+    const encodedStream = await createEncoder(data, chunkSize)
     const rootLabel = await getBabRootLabel(data, chunkSize)
 
     // Read and corrupt the encoded stream
@@ -531,7 +536,7 @@ test('decodeBab detects corrupted data', async t => {
     })
 
     // Attempt to decode - should fail during stream consumption
-    const verifiedStream = decodeBab(corruptedStream, rootLabel, chunkSize)
+    const verifiedStream = createDecoder(corruptedStream, rootLabel, chunkSize)
     const verifiedReader = verifiedStream.getReader()
 
     try {
@@ -562,35 +567,65 @@ test('detect corruption early without reading the entire stream', async t => {
 
     // Encode the original data
     const rootLabel = await getBabRootLabel(data, chunkSize)
+    const encodedStream = await createEncoder(data, chunkSize)
 
-    // Create modified data (corrupt first byte)
-    const modifiedData = new Uint8Array(data)
-    modifiedData[0] = modifiedData[0] ^ 0xFF
+    // Read the entire encoded stream into a buffer
+    const reader = encodedStream.getReader()
+    const encodedChunks:Uint8Array[] = []
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            encodedChunks.push(value)
+        }
+    } finally {
+        reader.releaseLock()
+    }
 
-    // Encode the modified data
-    const modifiedEncodedStream = await encodeBab(modifiedData, chunkSize)
+    // Combine into single buffer
+    const totalBytes = encodedChunks.reduce((sum, c) => sum + c.length, 0)
+    const encodedBuffer = new Uint8Array(totalBytes)
+    let writeOffset = 0
+    for (const chunk of encodedChunks) {
+        encodedBuffer.set(chunk, writeOffset)
+        writeOffset += chunk.length
+    }
+
+    // Corrupt the first chunk's data (after length prefix + labels)
+    // The structure is: [8 bytes length][labels...][chunk data...]
+    // For 6 chunks, there are 10 labels (5 internal nodes * 2) = 320 bytes
+    const firstChunkOffset = 8 + (10 * 32)
+    encodedBuffer[firstChunkOffset] = encodedBuffer[firstChunkOffset] ^ 0xFF
 
     // Track how much data was read from the stream before error
     let bytesRead = 0
-    const reader = modifiedEncodedStream.getReader()
     const trackingStream = new ReadableStream({
-        async pull (controller) {
-            try {
-                const { done, value } = await reader.read()
-                if (done) {
-                    controller.close()
-                    return
-                }
-                bytesRead += value.length
-                controller.enqueue(value)
-            } catch (error) {
-                controller.error(error)
+        start (controller) {
+            let offset = 0
+            // Enqueue one encoded chunk at a time to track reads accurately
+            for (const chunk of encodedChunks) {
+                controller.enqueue(encodedBuffer.slice(offset, offset + chunk.length))
+                offset += chunk.length
             }
+            controller.close()
         }
     })
 
-    // Try to decode with original root label
-    const verifiedStream = decodeBab(trackingStream, rootLabel, chunkSize)
+    const trackingReader = trackingStream.getReader()
+    const retrackingStream = new ReadableStream({
+        async pull (controller) {
+            const { done, value } = await trackingReader.read()
+            if (done) {
+                controller.close()
+                return
+            }
+            bytesRead += value.length
+            controller.enqueue(value)
+        }
+    })
+
+    // Try to decode
+    const verifiedStream = createDecoder(retrackingStream, rootLabel, chunkSize)
     const verifiedReader = verifiedStream.getReader()
 
     try {
@@ -602,24 +637,10 @@ test('detect corruption early without reading the entire stream', async t => {
     } catch (error) {
         t.ok(error instanceof Error, 'should throw an Error')
 
-        // Calculate total encoded size
-        const originalEncodedStream = await encodeBab(data, chunkSize)
-        const originalReader = originalEncodedStream.getReader()
-        let totalSize = 0
-        try {
-            while (true) {
-                const { done, value } = await originalReader.read()
-                if (done) break
-                totalSize += value.length
-            }
-        } finally {
-            originalReader.releaseLock()
-        }
-
         // Verify we didn't read the entire stream
         t.ok(
-            bytesRead < totalSize,
-            `should detect corruption early (read ${bytesRead}/${totalSize} bytes)`
+            bytesRead < totalBytes,
+            `should detect corruption early (read ${bytesRead}/${totalBytes} bytes)`
         )
     } finally {
         verifiedReader.releaseLock()
