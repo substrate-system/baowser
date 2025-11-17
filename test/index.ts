@@ -6,6 +6,16 @@ import {
     createEncoder,
     getRootLabel
 } from '../src/index.js'
+const isNode:boolean = (typeof process !== 'undefined' && !!process.versions?.node)
+let __dirname:string
+let path
+
+if (isNode) {
+    path = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const __filename = fileURLToPath(import.meta.url)
+    __dirname = path.dirname(__filename)
+}
 
 const CHUNK_SIZE = 64 * 1024  // 64KB chunks
 
@@ -480,55 +490,74 @@ test('createEncoder round-trip verification', async t => {
 })
 
 test('encodeBab and decodeBab with actual file', async t => {
-    // Use a size similar to the llama image in the demo: ~2.13 MB
-    // With 1024 byte chunks = 2080 chunks (not a power of 2)
-    const data = generateTestData(2180000)  // ~2.08 MB
+    // Read the actual llama.jpg file
     const chunkSize = 1024
 
-    // Create a ReadableStream from the data
-    const dataStream = new ReadableStream({
-        start (controller) {
-            controller.enqueue(data)
-            controller.close()
+    // Read file using Node.js fs (in browser this test will be skipped)
+    if (isNode) {
+        const fs = await import('node:fs')
+
+        const filePath = path.join(__dirname, 'example', 'llama.jpg')
+
+        // Read the entire file first to get root label
+        const fileBuffer = fs.readFileSync(filePath)
+        const data = new Uint8Array(fileBuffer)
+        const rootLabel = await getRootLabel(data, chunkSize)
+
+        t.ok(data.length > 0, 'file should have data')
+        t.ok(rootLabel, 'should have root label')
+
+        // Create a ReadableStream from the file
+        const fileReadStream = fs.createReadStream(filePath)
+
+        // Convert Node.js Readable to Web ReadableStream
+        const dataStream = new ReadableStream({
+            async start (controller) {
+                for await (const chunk of fileReadStream) {
+                    controller.enqueue(new Uint8Array(chunk))
+                }
+                controller.close()
+            }
+        })
+
+        // Encode the file stream
+        const encodedStream = createEncoder(chunkSize, dataStream)
+
+        // Decode and verify
+        const verifiedStream = createVerifier(encodedStream, rootLabel, chunkSize)
+
+        // Read verified data
+        const reader = verifiedStream.getReader()
+        const chunks:Uint8Array[] = []
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                chunks.push(value)
+            }
+        } finally {
+            reader.releaseLock()
         }
-    })
 
-    // Encode data
-    const encodedStream = createEncoder(chunkSize, dataStream)
-    const rootLabel = await getRootLabel(data, chunkSize)
-
-    // Decode and verify
-    const verifiedStream = createVerifier(encodedStream, rootLabel, chunkSize)
-
-    // Read verified data
-    const reader = verifiedStream.getReader()
-    const chunks:Uint8Array[] = []
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            chunks.push(value)
+        // Combine chunks
+        const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+        const result = new Uint8Array(totalLength)
+        let offset = 0
+        for (const chunk of chunks) {
+            result.set(chunk, offset)
+            offset += chunk.length
         }
-    } finally {
-        reader.releaseLock()
-    }
 
-    // Combine chunks
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    const result = new Uint8Array(totalLength)
-    let offset = 0
-    for (const chunk of chunks) {
-        result.set(chunk, offset)
-        offset += chunk.length
+        // Verify data matches original
+        t.equal(result.length, data.length, 'decoded data length should match')
+        t.ok(
+            result.every((byte, i) => byte === data[i]),
+            'decoded data should match original'
+        )
+    } else {
+        t.ok(true, 'Skipping file test in browser environment')
     }
-
-    // Verify data matches original
-    t.equal(result.length, data.length, 'decoded data length should match')
-    t.ok(
-        result.every((byte, i) => byte === data[i]),
-        'decoded data should match original'
-    )
 })
 
 test('decodeBab detects corrupted data', async t => {
