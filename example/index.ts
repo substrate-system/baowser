@@ -15,6 +15,7 @@ import {
 } from '../src/index'
 import Debug from '@substrate-system/debug'
 import '@substrate-system/css-normalize'
+// import '@substrate-system/a11y/reduced-motion'
 
 const debug = Debug(import.meta.env.DEV)
 debug('logging')
@@ -118,7 +119,9 @@ const Example:FunctionComponent = function () {
             <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">
                 web streams API
             </a>${NBSP}
-            and BLAKE3 hashes in the browser.
+            and <a href="https://github.com/oconnor663/blake3-js">
+                BLAKE3 hashes
+            </a> in the browser.
         </p>
 
         <p>
@@ -220,7 +223,7 @@ const Example:FunctionComponent = function () {
             ${state.path.value.includes('/single-stream') ?
                 html`<p>
                     All verification data is included in the stream.
-                    You only need to learn the root hash, and then you can
+                    You only need to know the root hash, and then you can
                     veryify the chunks as they arrive.
                 </p>
                 ` :
@@ -322,7 +325,7 @@ async function verifyFile () {
             addLog('', 'info')
 
             // Get the client's base64 text and encode it to a Bab stream
-            addLog('Encoding textarea content to Bab stream...', 'info')
+            addLog('Encoding textarea content to stream...', 'info')
             const clientBase64 = state.base64Text.value
             const encoder = new TextEncoder()
             const clientData = encoder.encode(clientBase64)
@@ -348,14 +351,21 @@ async function verifyFile () {
 
             addLog('Creating download stream with delays...', 'info')
 
-            // Create a throttled stream that simulates network download
-            const DOWNLOAD_CHUNK_SIZE = 16384 // 16KB chunks for download simulation
+            // throttled stream to simulate network download
+            const DOWNLOAD_CHUNK_SIZE = 16384 // 16KB chunks
             const streamToVerify = new ReadableStream({
                 async start (controller) {
                     for (const chunk of encodedChunks) {
                         // Split each chunk into smaller pieces
-                        for (let offset = 0; offset < chunk.length; offset += DOWNLOAD_CHUNK_SIZE) {
-                            const piece = chunk.slice(offset, offset + DOWNLOAD_CHUNK_SIZE)
+                        for (
+                            let offset = 0;
+                            offset < chunk.length;
+                            offset += DOWNLOAD_CHUNK_SIZE
+                        ) {
+                            const piece = chunk.slice(
+                                offset,
+                                offset + DOWNLOAD_CHUNK_SIZE
+                            )
                             controller.enqueue(piece)
                             // Simulate network delay
                             await new Promise(resolve => setTimeout(resolve, 1))
@@ -430,10 +440,7 @@ async function verifyFile () {
                 'success'
             )
             addLog('', 'info')
-            addLog(
-                'Each chunk was verified as part of the Merkle tree structure.',
-                'info'
-            )
+            addLog('Each chunk was verified.', 'info')
         } else if (state.encodedData.value) {
             // External metadata mode
             const metadata = state.encodedData.value
