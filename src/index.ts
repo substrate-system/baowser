@@ -1,5 +1,5 @@
 import { blake3 } from '@nichoth/hash-wasm/blake3'
-import { bytesToHex } from './util.js'
+import { bytesToHex, hexToBytes } from './util.js'
 
 /**
  * Metadata for a single chunk
@@ -32,42 +32,6 @@ export interface VerifierOptions {
      * Callback invoked when verification fails
      */
     onError?:(error:Error) => void
-}
-
-/**
- * Encodes data by chunking it and creating BLAKE3 hashes for each chunk
- *
- * @param data - The data to encode
- * @param chunkSize - Size of each chunk in bytes
- * @returns {Promise<EncodedMetadata>} Metadata containing root hash
- *          and chunk hashes
- */
-export async function encode (
-    data:Uint8Array,
-    chunkSize:number
-):Promise<EncodedMetadata> {
-    // Calculate root hash of entire data
-    const rootHash = await blake3(data)
-
-    // Break into chunks and hash each
-    const chunks:ChunkMetadata[] = []
-    for (let offset = 0; offset < data.length; offset += chunkSize) {
-        const end = Math.min(offset + chunkSize, data.length)
-        const chunk = data.slice(offset, end)
-        const chunkHash = await blake3(chunk)
-
-        chunks.push({
-            size: chunk.length,
-            hash: chunkHash
-        })
-    }
-
-    return {
-        rootHash,
-        fileSize: data.length,
-        chunkSize,
-        chunks
-    }
 }
 
 /**
@@ -386,110 +350,154 @@ async function hashInner (
 }
 
 /**
- * Convert hex string to Uint8Array
+ * Return a transform stream if input data is not provided.
+ *
+ * @param {number} chunkSize Chunk size
  */
-function hexToBytes (hex:string):Uint8Array {
-    const bytes = new Uint8Array(hex.length / 2)
-    for (let i = 0; i < hex.length; i += 2) {
-        bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
-    }
-    return bytes
-}
-
-/**
- * Build a Merkle tree from data chunks using range-based splitting
- * This matches the decoder's top-down approach
- */
-async function buildMerkleTree (
-    data:Uint8Array,
+export function createEncoder (
     chunkSize:number
-):Promise<MerkleNode> {
-    const numChunks = Math.ceil(data.length / chunkSize)
-
-    // Recursive function to build a node for a range of chunks
-    async function buildNode (start:number, end:number):Promise<MerkleNode> {
-        if (start === end) {
-            // Leaf node - single chunk
-            const chunkIndex = start
-            const isLastChunk = chunkIndex === numChunks - 1
-            const offset = chunkIndex * chunkSize
-            const size = isLastChunk
-                ? data.length - offset
-                : chunkSize
-
-            const chunk = data.slice(offset, offset + size)
-            const label = await hashChunk(chunk)
-
-            return {
-                label,
-                isLeaf: true,
-                data: chunk,
-                byteCount: chunk.length
-            }
-        }
-
-        // Internal node - split range
-        const mid = Math.floor((start + end) / 2)
-        const left = await buildNode(start, mid)
-        const right = await buildNode(mid + 1, end)
-
-        const byteCount = left.byteCount + right.byteCount
-        const label = await hashInner(left.label, right.label, byteCount)
-
-        return {
-            label,
-            isLeaf: false,
-            left,
-            right,
-            byteCount
-        }
-    }
-
-    return buildNode(0, numChunks - 1)
-}
+):TransformStream<Uint8Array, Uint8Array>
 
 /**
- * Encode data into bab format with interleaved labels and chunks
- * Returns a ReadableStream that outputs: [length] [labels...] [chunks...]
+ * Return a new readable stream.
+ *
+ * @param {number} chunkSize Chunk size.
+ * @param {ReadableStream<Uint8Array>} data The input data.
+ */
+export function createEncoder (
+    chunkSize:number,
+    data:ReadableStream<Uint8Array>
+):ReadableStream<Uint8Array>
+
+/**
+ * Encode data into bab format with interleaved labels and chunks.
+ * Returns a ReadableStream or a TransformStream that outputs:
+ *   [length] [labels...] [chunks...]
  * in depth-first traversal order.
  *
  * @param {number} chunkSize - Size of each chunk in bytes
- * @param {Uint8Array} [data] - The data to encode. If omitted, then this
- *   will return a new transform stream, that will encode its input.
- * @returns {Promise<ReadableStream<Uint8Array>>} A ReadableStream containing
- *   the encoded data with interleaved metadata
+ * @param {ReadableStream<Uint8Array>} [data] - The data stream to encode.
+ *   If omitted, returns a TransformStream that will encode its input.
+ * @returns {ReadableStream<Uint8Array>|TransformStream<Uint8Array>}
+ *   A ReadableStream or TransformStream containing the encoded data with
+ *   interleaved metadata
  */
-export async function createEncoder (
-    // data:Uint8Array,
+export function createEncoder (
     chunkSize:number,
     data?:ReadableStream<Uint8Array>,
-):Promise<ReadableStream<Uint8Array>|TransformStream<Uint8Array>> {
-    const tree = await buildMerkleTree(data, chunkSize)
+):ReadableStream<Uint8Array>|TransformStream<Uint8Array, Uint8Array> {
+    if (!data) {
+        // Create a transform stream that buffers all input,
+        // then builds the tree and emits encoded data
+        let buffer = new Uint8Array(0)
 
-    // Create a generator that yields chunks lazily
-    async function * generateChunks ():AsyncGenerator<Uint8Array> {
-        // Yield length prefix (8 bytes, little-endian)
-        const lengthBytes = new Uint8Array(8)
-        const view = new DataView(lengthBytes.buffer)
-        view.setBigUint64(0, BigInt(data.length), true)
-        yield lengthBytes
+        return new TransformStream<Uint8Array, Uint8Array>({
+            transform (chunk:Uint8Array) {
+                // Buffer incoming chunks
+                const newBuffer = new Uint8Array(buffer.length + chunk.length)
+                newBuffer.set(buffer, 0)
+                newBuffer.set(chunk, buffer.length)
+                buffer = newBuffer
+            },
 
-        // Yield tree in depth-first order
-        yield * emitNodeGenerator(tree)
+            async flush (controller:TransformStreamDefaultController<Uint8Array>) {
+                // Build the Merkle tree from buffered data
+                const tree = await buildMerkleTree(buffer, chunkSize)
+
+                // Emit length prefix (8 bytes, little-endian)
+                const lengthBytes = new Uint8Array(8)
+                const view = new DataView(lengthBytes.buffer)
+                view.setBigUint64(0, BigInt(buffer.length), true)
+                controller.enqueue(lengthBytes)
+
+                // Emit tree in depth-first order
+                for await (const chunk of emitNodeGenerator(tree)) {
+                    controller.enqueue(chunk)
+                }
+            }
+        })
     }
 
-    const iterator = generateChunks()
+    // If data is provided, return a ReadableStream
+    return new ReadableStream<Uint8Array>({
+        async start (controller) {
+            // Read all data from the stream
+            const reader = data.getReader()
+            const chunks:Uint8Array[] = []
+            let totalLength = 0
 
-    return new ReadableStream({
-        async pull (controller) {
-            const { done, value } = await iterator.next()
-            if (done) {
-                controller.close()
-            } else {
-                controller.enqueue(value)
+            try {
+                while (true) {
+                    const { done, value } = await reader.read()
+                    if (done) break
+                    chunks.push(value)
+                    totalLength += value.length
+                }
+            } finally {
+                reader.releaseLock()
             }
+
+            // Combine chunks into single buffer
+            const buffer = new Uint8Array(totalLength)
+            let offset = 0
+            for (const chunk of chunks) {
+                buffer.set(chunk, offset)
+                offset += chunk.length
+            }
+
+            // Build the Merkle tree
+            const tree = await buildMerkleTree(buffer, chunkSize)
+
+            // Emit length prefix (8 bytes, little-endian)
+            const lengthBytes = new Uint8Array(8)
+            const view = new DataView(lengthBytes.buffer)
+            view.setBigUint64(0, BigInt(buffer.length), true)
+            controller.enqueue(lengthBytes)
+
+            // Emit tree in depth-first order
+            for await (const chunk of emitNodeGenerator(tree)) {
+                controller.enqueue(chunk)
+            }
+
+            controller.close()
         }
     })
+}
+
+/**
+ * Encodes data by chunking it and creating BLAKE3 hashes for each chunk
+ *
+ * @param {Uint8Array} data - The data to encode
+ * @param {number} chunkSize - Size of each chunk in bytes
+ * @returns {Promise<EncodedMetadata>} Metadata containing root hash
+ *          and chunk hashes
+ */
+export async function encode (
+    data:Uint8Array,
+    chunkSize:number
+):Promise<EncodedMetadata> {
+    // Calculate root hash of entire data
+    const rootHash = await blake3(data)
+
+    // Break into chunks and hash each
+    const chunks:ChunkMetadata[] = []
+    for (let offset = 0; offset < data.length; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, data.length)
+        const chunk = data.slice(offset, end)
+        const chunkHash = await blake3(chunk)
+
+        chunks.push({
+            size: chunk.length,
+            hash: chunkHash
+        })
+    }
+
+    return {
+        rootHash,
+        fileSize: data.length,
+        chunkSize,
+        chunks
+    }
 }
 
 /**
@@ -707,10 +715,62 @@ function decodeBab (
  * Helper to get the root label from an encoded Bab stream
  * Builds the tree and returns just the root label
  */
-export async function getBabRootLabel (
+export async function getRootLabel (
     data:Uint8Array,
     chunkSize:number
 ):Promise<string> {
     const tree = await buildMerkleTree(data, chunkSize)
     return tree.label
+}
+
+/**
+ * Build a Merkle tree from data chunks using range-based splitting
+ * This matches the decoder's top-down approach
+ */
+async function buildMerkleTree (
+    data:Uint8Array,
+    chunkSize:number
+):Promise<MerkleNode> {
+    const numChunks = Math.ceil(data.length / chunkSize)
+
+    // Recursive function to build a node for a range of chunks
+    async function buildNode (start:number, end:number):Promise<MerkleNode> {
+        if (start === end) {
+            // Leaf node - single chunk
+            const chunkIndex = start
+            const isLastChunk = chunkIndex === numChunks - 1
+            const offset = chunkIndex * chunkSize
+            const size = isLastChunk
+                ? data.length - offset
+                : chunkSize
+
+            const chunk = data.slice(offset, offset + size)
+            const label = await hashChunk(chunk)
+
+            return {
+                label,
+                isLeaf: true,
+                data: chunk,
+                byteCount: chunk.length
+            }
+        }
+
+        // Internal node - split range
+        const mid = Math.floor((start + end) / 2)
+        const left = await buildNode(start, mid)
+        const right = await buildNode(mid + 1, end)
+
+        const byteCount = left.byteCount + right.byteCount
+        const label = await hashInner(left.label, right.label, byteCount)
+
+        return {
+            label,
+            isLeaf: false,
+            left,
+            right,
+            byteCount
+        }
+    }
+
+    return buildNode(0, numChunks - 1)
 }

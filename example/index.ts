@@ -10,7 +10,7 @@ import {
     encode,
     createVerifier,
     createEncoder,
-    getBabRootLabel,
+    getRootLabel,
     type EncodedMetadata
 } from '../src/index'
 import Debug from '@substrate-system/debug'
@@ -330,10 +330,18 @@ async function verifyFile () {
             const encoder = new TextEncoder()
             const clientData = encoder.encode(clientBase64)
 
+            // Create a ReadableStream from the data
+            const clientDataStream = new ReadableStream({
+                start (controller) {
+                    controller.enqueue(clientData)
+                    controller.close()
+                }
+            })
+
             // Encode the data into a Bab stream
-            const encodedStream = await createEncoder(
-                clientData,
-                state.chunkSize.value
+            const encodedStream = createEncoder(
+                state.chunkSize.value,
+                clientDataStream
             )
 
             // Read the encoded stream into chunks to simulate download
@@ -606,13 +614,22 @@ async function encodeFile () {
                 'info'
             )
 
-            const rootLabel = await getBabRootLabel(
+            const rootLabel = await getRootLabel(
                 serverData,
                 state.chunkSize.value
             )
-            const encodedStream = await createEncoder(
-                serverData,
-                state.chunkSize.value
+
+            // Create a ReadableStream from the data
+            const serverDataStream = new ReadableStream({
+                start (controller) {
+                    controller.enqueue(serverData)
+                    controller.close()
+                }
+            })
+
+            const encodedStream = createEncoder(
+                state.chunkSize.value,
+                serverDataStream
             )
 
             addLog(`Root label: ${rootLabel}`, 'hash')
