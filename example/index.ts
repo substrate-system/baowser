@@ -804,25 +804,22 @@ function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
 
     if (route.includes('single-stream')) {
         return html`<p>
-            <strong>Bab Incremental Verification:</strong> Alice encodes her data
-            into a Bab stream, which interleaves Merkle tree labels with data chunks
-            in depth-first order. She publishes only the root hash as the
-            trust anchor. Bob downloads the Bab stream and verifies it
+            Alice encodes her data
+            into a Merkle tree with interleaved labels and data chunks,
+            in depth-first order.
+            Bob downloads the stream and verifies it
             incrementally by computing labels from the data and comparing them
-            against the labels in the stream, ultimately verifying that his
-            computed root matches Alice's published root hash.
+            against the labels in the stream.
         </p>
         <p>
-            <strong>Trust model:</strong> Bob trusts only the root hash obtained
-            out-of-band. He does not trust the labels in the stream - instead, he
-            cryptographically verifies each label by recomputing it from verified
-            data. Every chunk and label is verified before use.
+            This is good for use cases where there is some trust between the
+            recipient and the server, and you just want to guarantee that data
+            has not been corrupted during transit.
         </p>
         <p>
             Bob can detect corruption as soon as a
-            corrupted chunk or label is processed - he doesn't need to download
-            the entire file first. The interleaved labels enable fail-fast
-            incremental verification.
+            corrupted chunk is processed ${EM_DASH} he doesn't need to
+            download the entire file.
         </p>
         <p>
             <strong>Demo:</strong> Modify the textarea to simulate a corrupted
