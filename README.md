@@ -147,7 +147,7 @@ for some use cases:
 
 * Store metadata in a database but data in object storage
 * Transmit metadata via different channels (API vs CDN)
-* Update metadata without re-uploading data
+* File transfer with zero trust between participants
 
 Or the metadata can be interleaved with the blob content. In that case only
 a single stream is required for verification (no external metadata).
