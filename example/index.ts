@@ -15,11 +15,8 @@ import {
 } from '../src/index'
 import Debug from '@substrate-system/debug'
 import '@substrate-system/css-normalize'
-// import '@substrate-system/a11y/reduced-motion'
 
 const debug = Debug(import.meta.env.DEV)
-debug('logging')
-
 const EM_DASH = '\u2014'
 const NBSP = '\u00A0'
 
@@ -40,7 +37,7 @@ const state:{
     encodedData:Signal<EncodedMetadata|null>;
     babData:Signal<{
         rootLabel:string,
-        encodedStream:ReadableStream<Uint8Array<ArrayBufferLike>>
+        babStream:Uint8Array  // The encoded Bab stream bytes
     }|null>;
     logs:Signal<LogEntry[]>;
     stats:Signal<Stats|null>;
@@ -223,8 +220,7 @@ const Example:FunctionComponent = function () {
             ${state.path.value.includes('/single-stream') ?
                 html`<p>
                     All verification data is included in the stream.
-                    You only need to know the root hash, and then you can
-                    veryify the chunks as they arrive.
+                    You can veryify the chunks as they arrive.
                 </p>
                 ` :
                 html`<p>
@@ -316,7 +312,13 @@ async function verifyFile () {
 
         if (isSingleStream && state.babData.value) {
             // Bab mode: decode and verify single stream
-            const { rootLabel } = state.babData.value
+            const { rootLabel, babStream } = state.babData.value
+
+            // Check if textarea was modified
+            const clientBase64 = state.base64Text.value
+            const serverBase64 = llamaBase64
+            const isModified = clientBase64 !== serverBase64
+
             addLog(
                 '=== Starting Bab Stream Verification ===',
                 'info'
@@ -324,60 +326,108 @@ async function verifyFile () {
             addLog(`Expected root label: ${rootLabel}`, 'hash')
             addLog('', 'info')
 
-            // Get the client's base64 text and encode it to a Bab stream
-            addLog('Encoding textarea content to stream...', 'info')
-            const clientBase64 = state.base64Text.value
-            const encoder = new TextEncoder()
-            const clientData = encoder.encode(clientBase64)
+            // The Bab stream contains interleaved labels and data chunks in depth-first order.
+            // When the user modifies the textarea, we simulate a corrupted transmission
+            // by flipping some bytes in the Bab stream.
+            //
+            // Key insight: In Bab, we don't need to know WHICH bytes are data vs labels.
+            // We just corrupt some bytes. If we corrupt a data chunk, verification fails
+            // when computing that chunk's hash. If we corrupt a label, verification fails
+            // when comparing against the computed child label.
+            let streamToVerify = babStream
 
-            // Create a ReadableStream from the data
-            const clientDataStream = new ReadableStream({
-                start (controller) {
-                    controller.enqueue(clientData)
-                    controller.close()
+            if (isModified) {
+                addLog('⚠ Textarea modified - simulating corrupted transmission', 'info')
+                addLog('', 'info')
+                addLog('HOW THIS WORKS:', 'info')
+                addLog('1. Alice creates Bab stream from ORIGINAL data (llama image)', 'info')
+                addLog('2. Alice publishes root hash via trusted channel.', 'info')
+                addLog('3. Bob downloads Bab stream (simulating with local stream)', 'info')
+                addLog('4. Stream gets corrupted in transit (simulating with your edit)', 'info')
+                addLog('5. Bob verifies with ONLY the root hash - incremental verification!', 'info')
+                addLog('', 'info')
+
+                // Create a copy of the original stream
+                streamToVerify = new Uint8Array(babStream)
+
+                // Find the first byte that differs between original and modified
+                const encoder = new TextEncoder()
+                const originalBytes = encoder.encode(serverBase64)
+                const modifiedBytes = encoder.encode(clientBase64)
+
+                let firstDiffIndex = -1
+                const minLength = Math.min(originalBytes.length, modifiedBytes.length)
+                for (let i = 0; i < minLength; i++) {
+                    if (originalBytes[i] !== modifiedBytes[i]) {
+                        firstDiffIndex = i
+                        break
+                    }
                 }
-            })
 
-            // Encode the data into a Bab stream
-            const encodedStream = createEncoder(
-                state.chunkSize.value,
-                clientDataStream
-            )
-
-            // Read the encoded stream into chunks to simulate download
-            const reader = encodedStream.getReader()
-            const encodedChunks:Uint8Array[] = []
-            try {
-                while (true) {
-                    const { done, value } = await reader.read()
-                    if (done) break
-                    encodedChunks.push(value)
+                // Handle length changes
+                if (firstDiffIndex === -1 && originalBytes.length !== modifiedBytes.length) {
+                    firstDiffIndex = minLength
                 }
-            } finally {
-                reader.releaseLock()
+
+                if (firstDiffIndex >= 0) {
+                    // Map this byte position in the source data to the Bab stream
+                    // We need to account for:
+                    // 1. 8-byte length prefix
+                    // 2. Labels that come before chunks in depth-first order
+                    //
+                    // For now, let's use a simple heuristic: corrupt a byte roughly
+                    // in the position corresponding to the first difference.
+                    // The Bab stream has labels interspersed, so we'll corrupt at
+                    // a position that's proportionally similar.
+
+                    const dataRatio = firstDiffIndex / originalBytes.length
+                    // Skip the length prefix (8 bytes)
+                    const babDataStart = 8
+                    const babDataLength = streamToVerify.length - babDataStart
+                    const corruptionOffset = babDataStart + Math.floor(babDataLength * dataRatio)
+
+                    // Corrupt a small number of bytes to simulate transmission error
+                    const bytesToCorrupt = Math.min(4, streamToVerify.length - corruptionOffset)
+
+                    const originalByte = streamToVerify[corruptionOffset]
+                    for (let i = 0; i < bytesToCorrupt; i++) {
+                        streamToVerify[corruptionOffset + i] ^= 0xFF  // Flip all bits
+                    }
+
+                    addLog(`Data difference detected at byte ${firstDiffIndex} of ${originalBytes.length}`, 'info')
+                    addLog(`Corrupting Bab stream at offset ${corruptionOffset} (${bytesToCorrupt} bytes)`, 'info')
+                    addLog(`  Original byte: 0x${originalByte.toString(16).padStart(2, '0')}`, 'info')
+                    addLog(`  Corrupted byte: 0x${streamToVerify[corruptionOffset].toString(16).padStart(2, '0')}`, 'info')
+                    addLog('', 'info')
+                    addLog('⚠ Verification should FAIL FAST when corrupted chunk is processed!', 'error')
+                    addLog('', 'info')
+                } else {
+                    addLog('No differences found between original and modified text', 'info')
+                    addLog('Verification should succeed', 'success')
+                    addLog('', 'info')
+                }
             }
 
-            addLog('Creating download stream with delays...', 'info')
+            addLog('Creating download stream with simulated delays...', 'info')
+            addLog('Stream will verify incrementally as data arrives', 'info')
+            addLog('', 'info')
 
-            // throttled stream to simulate network download
-            const DOWNLOAD_CHUNK_SIZE = 16384 // 16KB chunks
-            const streamToVerify = new ReadableStream({
+            // Create a throttled stream that simulates network download
+            const DOWNLOAD_CHUNK_SIZE = 16384 // 16KB chunks for network simulation
+            const downloadStream = new ReadableStream({
                 async start (controller) {
-                    for (const chunk of encodedChunks) {
-                        // Split each chunk into smaller pieces
-                        for (
-                            let offset = 0;
-                            offset < chunk.length;
-                            offset += DOWNLOAD_CHUNK_SIZE
-                        ) {
-                            const piece = chunk.slice(
-                                offset,
-                                offset + DOWNLOAD_CHUNK_SIZE
-                            )
-                            controller.enqueue(piece)
-                            // Simulate network delay
-                            await new Promise(resolve => setTimeout(resolve, 1))
-                        }
+                    for (
+                        let offset = 0;
+                        offset < streamToVerify.length;
+                        offset += DOWNLOAD_CHUNK_SIZE
+                    ) {
+                        const piece = streamToVerify.slice(
+                            offset,
+                            Math.min(offset + DOWNLOAD_CHUNK_SIZE, streamToVerify.length)
+                        )
+                        // Simulate network delay
+                        await new Promise(resolve => setTimeout(resolve, 0))
+                        controller.enqueue(piece)
                     }
                     controller.close()
                 }
@@ -386,17 +436,35 @@ async function verifyFile () {
             addLog('Starting verification...', 'info')
             addLog('', 'info')
 
-            // Decode and verify the stream
-            // createVerifier transforms the encoded stream back to original data
-            // and throws if any hashes don't match the expected root label
+            // Decode and verify the stream with INCREMENTAL VERIFICATION
+            //
+            // This is the key to bab's design:
+            // - We only need the trusted root label (received out of band)
+            // - As the stream arrives, we read labels and chunks in depth-first order
+            // - We verify each subtree's label IMMEDIATELY after computing it
+            // - If any label mismatches the expected value, we FAIL IMMEDIATELY
+            // - We don't need to download or process the entire file to detect corruption
+            //
+            // The createVerifier will:
+            // 1. Read the length prefix
+            // 2. Recursively process the tree in depth-first order:
+            //    - For internal nodes: read left/right child labels
+            //    - Process left child, compute its label, verify it matches
+            //    - Process right child, compute its label, verify it matches
+            //    - Compute parent label and return it for verification
+            // 3. Verify the root label matches our trusted value
+            //
+            // If the Bab stream was corrupted, verification will fail as soon as
+            // we process the first corrupted chunk - we won't process all 2080 chunks!
             const verifiedStream = createVerifier(
-                streamToVerify,
+                downloadStream,
                 rootLabel,
                 state.chunkSize.value,
                 {
                     onChunkVerified: (chunkIndex, totalChunks) => {
-                        // Only log every 50 chunks to avoid overwhelming the log
+                        // Log first few chunks to show incremental verification
                         if (
+                            chunkIndex <= 5 ||
                             chunkIndex % 50 === 0 ||
                             chunkIndex === totalChunks
                         ) {
@@ -405,19 +473,34 @@ async function verifyFile () {
                                 `--- Chunk ${chunkIndex}/${totalChunks} ---`,
                                 'info'
                             )
-                            addLog('Chunk verified via Merkle tree', 'success')
+                            addLog('Chunk verified incrementally', 'success')
+                            if (chunkIndex === 5) {
+                                addLog('(Logging every 50th chunk from now on...)', 'info')
+                            }
                         }
                     },
                     onError: (err) => {
-                        addLog(`Verification error: ${err.message}`, 'error')
+                        debug('got an error', err)
+                        addLog('', 'info')
+                        addLog('='.repeat(60), 'error')
+                        addLog('INCREMENTAL VERIFICATION FAILED', 'error')
+                        addLog('='.repeat(60), 'error')
+                        addLog('', 'error')
+                        addLog(`Error: ${err.message}`, 'error')
+                        addLog('', 'error')
+                        addLog(
+                            "Stream was aborted early because the hash didn't match.",
+                            'error')
                     }
                 }
             )
 
             // Read verified chunks from the decoded stream
-            // NOTE: If a hash mismatch is detected during Merkle tree verification,
-            // createVerifier will throw an error, aborting the stream processing
-            // immediately. No more chunks will be processed.
+            //
+            // IMPORTANT: If a label mismatch is detected during tree traversal,
+            // the verifiedStream will throw an error immediately, aborting the
+            // entire process. The while loop below will stop, and no more chunks
+            // will be downloaded or processed. This is true incremental verification!
             const verifiedReader = verifiedStream.getReader()
             const verifiedChunks:Uint8Array[] = []
 
@@ -462,10 +545,19 @@ async function verifyFile () {
 
             // Get the client's base64 text (potentially modified)
             const clientBase64 = state.base64Text.value
+            const serverBase64 = llamaBase64
+            const isModified = clientBase64 !== serverBase64
+
+            if (isModified) {
+                addLog('⚠ Textarea has been modified!', 'info')
+                addLog('Verification will fail on first mismatched chunk', 'info')
+                addLog('', 'info')
+            }
+
             const encoder = new TextEncoder()
             const clientData = encoder.encode(clientBase64)
 
-            addLog(`Client base64 text size: ${clientData.length} bytes`, 'info')
+            addLog(`Data size: ${clientData.length} bytes`, 'info')
             addLog('', 'info')
             addLog('Creating stream and verifier...', 'info')
 
@@ -476,7 +568,7 @@ async function verifyFile () {
 
                     for (let i = 0; i < metadata.chunks.length; i++) {
                         // Simulate network delay
-                        await new Promise(resolve => setTimeout(resolve, 5))
+                        await new Promise(resolve => setTimeout(resolve, 0))
 
                         const chunkOffset = i * metadata.chunkSize
                         const chunkEnd = Math.min(
@@ -573,8 +665,12 @@ async function verifyFile () {
             )
         }
     } catch (error) {
-        addLog('', 'info')
-        addLog(`Error: ${(error as Error).message}`, 'error')
+        // Don't add redundant error logging if onError already logged it
+        const errorMessage = (error as Error).message
+        if (!errorMessage.includes('label mismatch')) {
+            addLog('', 'info')
+            addLog(`Error: ${errorMessage}`, 'error')
+        }
     } finally {
         state.isVerifying.value = false
     }
@@ -619,25 +715,40 @@ async function encodeFile () {
                 state.chunkSize.value
             )
 
-            // Create a ReadableStream from the data
-            const serverDataStream = new ReadableStream({
+            addLog(`Root label: ${rootLabel}`, 'hash')
+            addLog('', 'info')
+
+            // Create the actual Bab-encoded stream
+            const dataStream = new ReadableStream({
                 start (controller) {
                     controller.enqueue(serverData)
                     controller.close()
                 }
             })
 
-            const encodedStream = createEncoder(
-                state.chunkSize.value,
-                serverDataStream
-            )
+            const encodedStream = createEncoder(state.chunkSize.value, dataStream)
+            const reader = encodedStream.getReader()
+            const chunks:Uint8Array[] = []
 
-            addLog(`Root label: ${rootLabel}`, 'hash')
-            addLog('', 'info')
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                chunks.push(value)
+            }
+
+            const totalLength = chunks.reduce((sum, c) => sum + c.length, 0)
+            const babStream = new Uint8Array(totalLength)
+            let offset = 0
+            for (const chunk of chunks) {
+                babStream.set(chunk, offset)
+                offset += chunk.length
+            }
+
             const numChunks = Math.ceil(serverData.length / state.chunkSize.value)
             addLog(`Encoded ${numChunks} chunks successfully`, 'success')
+            addLog(`Bab stream size: ${babStream.length} bytes`, 'info')
 
-            state.babData.value = { rootLabel, encodedStream }
+            state.babData.value = { rootLabel, babStream }
             state.encodedData.value = null
             state.stats.value = {
                 fileSize: serverData.length,
@@ -696,16 +807,31 @@ function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
 
     if (route.includes('single-stream')) {
         return html`<p>
-            Get a single stream that includes metadata and
-            blob content mixed together. Alice can publish just the root
-            hash ahead of time, and then Bob can verify the
-            data incrementally, without waiting for the full download. He
-            just needs the root hash.
+            <strong>Bab Incremental Verification:</strong> Alice encodes her data
+            into a Bab stream, which interleaves Merkle tree labels with data chunks
+            in depth-first order. She publishes only the root hash as the
+            trust anchor. Bob downloads the Bab stream and verifies it
+            incrementally by computing labels from the data and comparing them
+            against the labels in the stream, ultimately verifying that his
+            computed root matches Alice's published root hash.
         </p>
         <p>
-            The function <code>createVerifier</code> will return a new stream of
-            just the content (no metadata), and will throw an error if any
-            of the hashes are bad.
+            <strong>Trust model:</strong> Bob trusts only the root hash obtained
+            out-of-band. He does not trust the labels in the stream - instead, he
+            cryptographically verifies each label by recomputing it from verified
+            data. Every chunk and label is verified before use.
+        </p>
+        <p>
+            Bob can detect corruption as soon as a
+            corrupted chunk or label is processed - he doesn't need to download
+            the entire file first. The interleaved labels enable fail-fast
+            incremental verification.
+        </p>
+        <p>
+            <strong>Demo:</strong> Modify the textarea to simulate a corrupted
+            transmission. The demo will flip bytes in the Bab stream at the
+            corresponding position. Verification should fail at the first
+            corrupted chunk.
         </p>
         `
     }

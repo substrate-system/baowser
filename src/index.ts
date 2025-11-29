@@ -641,7 +641,8 @@ function decodeBab (
                         const error = new Error(
                             `Left child label mismatch at [${start},${mid}]. ` +
                             `Expected: ${expectedLeftLabel}, ` +
-                            `Got: ${computedLeftLabel}`
+                            `Got: ${computedLeftLabel}. ` +
+                            `FAIL-FAST: Aborting verification immediately!`
                         )
                         if (options.onError) {
                             options.onError(error)
@@ -656,7 +657,8 @@ function decodeBab (
                         const error = new Error(
                             `Right child label mismatch at [${mid + 1},${end}]. ` +
                             `Expected: ${expectedRightLabel}, ` +
-                            `Got: ${computedRightLabel}`
+                            `Got: ${computedRightLabel}. ` +
+                            `FAIL-FAST: Aborting verification immediately!`
                         )
                         if (options.onError) {
                             options.onError(error)
