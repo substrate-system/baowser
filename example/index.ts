@@ -16,6 +16,13 @@ import {
 import Debug from '@substrate-system/debug'
 import '@substrate-system/css-normalize'
 
+if (import.meta.env.DEV || import.meta.env.MODE === 'staging') {
+    localStorage.setItem('DEBUG', 'baowser')
+} else {
+    localStorage.removeItem('DEBUG')
+    localStorage.removeItem('debug')
+}
+
 const debug = Debug(import.meta.env.DEV)
 const EM_DASH = '\u2014'
 const NBSP = '\u00A0'
@@ -436,14 +443,13 @@ async function verifyFile () {
             addLog('Starting verification...', 'info')
             addLog('', 'info')
 
-            // Decode and verify the stream with INCREMENTAL VERIFICATION
+            // Decode and verify the stream
             //
             // This is the key to bab's design:
-            // - We only need the trusted root label (received out of band)
-            // - As the stream arrives, we read labels and chunks in depth-first order
+            // - As the stream arrives, we read labels and chunks in
+            //   depth-first order
             // - We verify each subtree's label IMMEDIATELY after computing it
-            // - If any label mismatches the expected value, we FAIL IMMEDIATELY
-            // - We don't need to download or process the entire file to detect corruption
+            // - If any label mismatches the expected value, we fail immediately
             //
             // The createVerifier will:
             // 1. Read the length prefix
@@ -453,9 +459,6 @@ async function verifyFile () {
             //    - Process right child, compute its label, verify it matches
             //    - Compute parent label and return it for verification
             // 3. Verify the root label matches our trusted value
-            //
-            // If the Bab stream was corrupted, verification will fail as soon as
-            // we process the first corrupted chunk - we won't process all 2080 chunks!
             const verifiedStream = createVerifier(
                 downloadStream,
                 rootLabel,

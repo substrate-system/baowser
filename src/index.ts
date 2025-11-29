@@ -1,5 +1,7 @@
 import { blake3 } from '@nichoth/hash-wasm/blake3'
 import { bytesToHex, hexToBytes } from './util.js'
+import Debug from '@substrate-system/debug'
+const debug = Debug('baowser')
 
 /**
  * Metadata for a single chunk
@@ -541,7 +543,7 @@ function decodeBab (
     stream:ReadableStream<Uint8Array>,
     rootLabel:string,
     chunkSize:number,
-    options:VerifierOptions = {}
+    opts:VerifierOptions = {}
 ):ReadableStream<Uint8Array> {
     const LABEL_SIZE = 32  // BLAKE3 produces 32-byte hashes
 
@@ -617,8 +619,8 @@ function decodeBab (
                         // Emit verified chunk immediately
                         controller.enqueue(chunkData)
 
-                        if (options.onChunkVerified) {
-                            options.onChunkVerified(chunkIndex + 1, numChunks)
+                        if (opts.onChunkVerified) {
+                            opts.onChunkVerified(chunkIndex + 1, numChunks)
                         }
 
                         return label
@@ -635,34 +637,30 @@ function decodeBab (
                     // Decode left child and verify immediately
                     const mid = Math.floor((start + end) / 2)
                     const computedLeftLabel = await decodeNode(start, mid)
+                    // Decode right child and verify immediately
+                    const computedRightLabel = await decodeNode(mid + 1, end)
 
                     // Verify left label immediately before continuing
                     if (computedLeftLabel !== expectedLeftLabel) {
+                        debug('if', computedLeftLabel, expectedLeftLabel)
                         const error = new Error(
                             `Left child label mismatch at [${start},${mid}]. ` +
                             `Expected: ${expectedLeftLabel}, ` +
                             `Got: ${computedLeftLabel}. ` +
-                            `FAIL-FAST: Aborting verification immediately!`
+                            'FAIL-FAST: Aborting verification immediately!'
                         )
-                        if (options.onError) {
-                            options.onError(error)
+                        if (opts.onError) {
+                            opts.onError(error)
                         }
                         throw error
-                    }
-
-                    // Decode right child and verify immediately
-                    const computedRightLabel = await decodeNode(mid + 1, end)
-
-                    if (computedRightLabel !== expectedRightLabel) {
+                    } else if (computedRightLabel !== expectedRightLabel) {
+                        debug('else', computedRightLabel, expectedRightLabel)
                         const error = new Error(
                             `Right child label mismatch at [${mid + 1},${end}]. ` +
                             `Expected: ${expectedRightLabel}, ` +
                             `Got: ${computedRightLabel}. ` +
-                            `FAIL-FAST: Aborting verification immediately!`
+                            'FAIL-FAST: Aborting verification immediately!'
                         )
-                        if (options.onError) {
-                            options.onError(error)
-                        }
                         throw error
                     }
 
@@ -694,16 +692,13 @@ function decodeBab (
                         `Root label mismatch. Expected: ${rootLabel}, ` +
                         `Got: ${computedRootLabel}`
                     )
-                    if (options.onError) {
-                        options.onError(error)
-                    }
                     throw error
                 }
 
                 controller.close()
             } catch (error) {
-                if (options.onError && error instanceof Error) {
-                    options.onError(error)
+                if (opts.onError && error instanceof Error) {
+                    opts.onError(error)
                 }
                 controller.error(error)
             } finally {
