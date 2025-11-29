@@ -264,7 +264,7 @@ const verifier = createVerifier(metadata, {
   },
   onError: (error) => {
     // Called immediately when verification fails
-    console.error('⚠️  Verification error:', error.message)
+    console.error('Verification error:', error.message)
   }
 })
 
@@ -292,7 +292,7 @@ try {
     offset += chunk.length
   }
 
-  console.log('✅ File fully verified!', verifiedData.length, 'bytes')
+  console.log('File fully verified!', verifiedData.length, 'bytes')
 
   // Use the verified data
   const blob = new Blob([verifiedData], { type: 'image/jpeg' })
@@ -301,7 +301,7 @@ try {
 
 } catch (error) {
   // If verification fails, reader.read() will throw
-  console.error('❌ Stream aborted due to verification failure:', error.message)
+  console.error('Stream aborted due to verification failure:', error.message)
   // The download is automatically stopped - no more data is processed
   throw error
 } finally {

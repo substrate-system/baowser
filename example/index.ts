@@ -607,7 +607,6 @@ async function verifyFile () {
                     }
                 },
 
-                // here we listen for errors
                 onError: (err) => {
                     addLog(`Verification error: ${err.message}`, 'error')
                 }
@@ -619,7 +618,6 @@ async function verifyFile () {
             // Read verified chunks
             // NOTE: If a hash mismatch is detected, reader.read() will throw
             // an error, aborting the stream processing immediately.
-            // No more chunks will be processed or downloaded.
             while (true) {
                 const { done, value } = await reader.read()
                 if (done) break
@@ -669,11 +667,7 @@ async function verifyFile () {
         }
     } catch (error) {
         // Don't add redundant error logging if onError already logged it
-        const errorMessage = (error as Error).message
-        if (!errorMessage.includes('label mismatch')) {
-            addLog('', 'info')
-            addLog(`Error: ${errorMessage}`, 'error')
-        }
+        debug('error in stream', error)
     } finally {
         state.isVerifying.value = false
     }

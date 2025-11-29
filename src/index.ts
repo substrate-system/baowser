@@ -80,9 +80,6 @@ function createSimpleVerifier (
                             `Expected: ${expectedChunk.hash}, ` +
                             `Got: ${computedHash}`
                         )
-                        if (options.onError) {
-                            options.onError(error)
-                        }
                         throw error
                     }
 
