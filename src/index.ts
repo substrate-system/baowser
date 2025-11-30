@@ -643,20 +643,15 @@ function decodeBab (
                         const error = new Error(
                             `Left child label mismatch at [${start},${mid}]. ` +
                             `Expected: ${expectedLeftLabel}, ` +
-                            `Got: ${computedLeftLabel}. ` +
-                            'FAIL-FAST: Aborting verification immediately!'
+                            `Got: ${computedLeftLabel}. `
                         )
-                        if (opts.onError) {
-                            opts.onError(error)
-                        }
                         throw error
                     } else if (computedRightLabel !== expectedRightLabel) {
                         debug('else', computedRightLabel, expectedRightLabel)
                         const error = new Error(
                             `Right child label mismatch at [${mid + 1},${end}]. ` +
                             `Expected: ${expectedRightLabel}, ` +
-                            `Got: ${computedRightLabel}. ` +
-                            'FAIL-FAST: Aborting verification immediately!'
+                            `Got: ${computedRightLabel}. `
                         )
                         throw error
                     }
@@ -694,6 +689,9 @@ function decodeBab (
 
                 controller.close()
             } catch (error) {
+                // Only call onError if it hasn't been called already
+                // Errors from decodeNode already called onError
+                // But other errors (like stream read errors) need it
                 if (opts.onError && error instanceof Error) {
                     opts.onError(error)
                 }

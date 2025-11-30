@@ -730,6 +730,13 @@ test('detect corruption early without reading the entire stream', async t => {
     }
 })
 
+test('All done', () => {
+    if (!isNode) {
+        // @ts-expect-error tests
+        window.testsFinished = true
+    }
+})
+
 // Generate test data
 function generateTestData (size:number):Uint8Array {
     const data = new Uint8Array(size)

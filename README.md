@@ -54,7 +54,7 @@ npm i -S @substrate-system/baowser
 import {
   encode,
   createEncoder,
-  getBabRootLabel
+  getRootLabel
 } from '@substrate-system/baowser'
 
 // Your file data
@@ -67,9 +67,9 @@ const metadata = await encode(fileData, chunkSize)
 // Send fileData via CDN/object storage
 
 // Option 2: Single stream with interleaved metadata (bab format)
-const rootLabel = await getBabRootLabel(fileData, chunkSize)
-const encodedStream = await createEncoder(fileData, chunkSize)
-// Send just the rootLabel separately (very small)
+const rootLabel = await getRootLabel(fileData, chunkSize)
+const encodedStream = createEncoder(chunkSize, fileData)
+// Send just the rootLabel via trusted channel (IPFS CID, etc.)
 // Stream the encodedStream to the client
 ```
 
@@ -161,35 +161,38 @@ If the hash does not match, it will throw an error and abort the stream.
 
 ### Single Stream (metadata + data)
 
-When you want a single self-contained stream with metadata interleaved
-(similar to [Bab](https://worm-blossom.github.io/bab/)),
-use the Bab-compatible encoding.
+Create a single self-contained stream with metadata interleaved
+with data (similar to [Bab](https://worm-blossom.github.io/bab/)).
 
-You only need the root hash, which you can get cheaply, and then you can verify
-all the chunks as they arrive.
+You only need to share the root hash (32 bytes) via a trusted
+channel, and the stream contains all the verification metadata needed for
+incremental verification. This is ideal for content-addressed systems like
+IPFS or torrents where the root hash IS the content identifier.
 
 ```js
 import {
   createEncoder,
-  getBabRootLabel,
+  getRootLabel,
   createVerifier,
   verify
 } from '@substrate-system/baowser'
 
 // On the server: encode data into Bab format
-const data = new Uint8Array([...])  // your data
+const data = new Uint8Array([/* ... */])  // your data
 const chunkSize = 1024
-const encodedStream = await createEncoder(data, chunkSize)
 
-// Get the root label (hash) to send separately or embed
-const rootLabel = await getBabRootLabel(data, chunkSize)
+// Get the root label (hash) - this is published via trusted channel
+const rootLabel = await getRootLabel(data, chunkSize)
+
+// Create the encoded stream
+const encodedStream = createEncoder(chunkSize, data)
 
 
 // ------- client side -------
 
 
 // Option 1: Stream approach - decode and verify as data arrives
-const response = await fetch('/data.bab')
+const response = await fetch('/data')
 const verifiedStream = createVerifier(response.body, rootLabel, chunkSize, {
   onChunkVerified: (i, total) => console.log(`${i}/${total}`),
   onError: (err) => console.error('Verification failed:', err)
@@ -204,7 +207,7 @@ while (true) {
   chunks.push(value)
 }
 
-// Option 2: Promise approach - simpler
+// Option 2: Use a promise
 const response2 = await fetch('/data.bab')
 const verifiedData = await verify(response2.body, rootLabel, chunkSize)
 // verifiedData is a Uint8Array with all data
@@ -212,9 +215,9 @@ const verifiedData = await verify(response2.body, rootLabel, chunkSize)
 
 #### Encoding Format
 
-The Bab encoding uses a Merkle tree structure where hash labels
+The encoding format uses a Merkle tree structure where hash labels
 are interleaved with data chunks. The decoder performs full verification by
-recursively verifying each node's label matches the computed hash from
+recursively verifying that each node's label matches the computed hash from
 its children, ensuring the entire tree structure is valid.
 
 
@@ -313,7 +316,7 @@ try {
 
 1. The onError callback is invoked (if you provided one) with the error
 2. An error is thrown from the stream with a message like:
-   Chunk 2 hash mismatch. Expected: abc123..., Got: def456...
+   `Chunk 2 hash mismatch. Expected: abc123..., Got: def456...`
 3. This causes `reader.read()` to reject, triggering the catch block
 
 ```js

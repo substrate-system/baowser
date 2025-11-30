@@ -344,7 +344,10 @@ async function verifyFile () {
             let streamToVerify = babStream
 
             if (isModified) {
-                addLog('⚠ Textarea modified - simulating corrupted transmission', 'info')
+                addLog(
+                    'Textarea modified - simulating corrupted transmission',
+                    'info'
+                )
                 addLog('', 'info')
                 addLog('HOW THIS WORKS:', 'info')
                 addLog('1. Alice creates Bab stream from ORIGINAL data (llama image)', 'info')
@@ -405,8 +408,6 @@ async function verifyFile () {
                     addLog(`Corrupting Bab stream at offset ${corruptionOffset} (${bytesToCorrupt} bytes)`, 'info')
                     addLog(`  Original byte: 0x${originalByte.toString(16).padStart(2, '0')}`, 'info')
                     addLog(`  Corrupted byte: 0x${streamToVerify[corruptionOffset].toString(16).padStart(2, '0')}`, 'info')
-                    addLog('', 'info')
-                    addLog('⚠ Verification should FAIL FAST when corrupted chunk is processed!', 'error')
                     addLog('', 'info')
                 } else {
                     addLog('No differences found between original and modified text', 'info')
@@ -492,8 +493,10 @@ async function verifyFile () {
                         addLog(`Error: ${err.message}`, 'error')
                         addLog('', 'error')
                         addLog(
-                            "Stream was aborted early because the hash didn't match.",
-                            'error')
+                            'Stream was aborted early because the hash ' +
+                                "didn't match.",
+                            'error'
+                        )
                     }
                 }
             )
@@ -552,7 +555,6 @@ async function verifyFile () {
             const isModified = clientBase64 !== serverBase64
 
             if (isModified) {
-                addLog('⚠ Textarea has been modified!', 'info')
                 addLog('Verification will fail on first mismatched chunk', 'info')
                 addLog('', 'info')
             }
