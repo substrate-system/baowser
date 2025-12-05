@@ -1,7 +1,6 @@
 {
   "name": "@substrate-system/baowser",
   "version": "0.0.0",
-  "private": true,
   "description": "Streaming hash-based verification in the browser",
   "type": "module",
   "main": "dist/index.js",
@@ -16,6 +15,14 @@
     ".": {
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./fs": {
+      "import": "./dist/fs.js",
+      "require": "./dist/fs.cjs"
+    },
+    "./node": {
+      "import": "./dist/fs.js",
+      "require": "./dist/fs.cjs"
     },
     "./*": {
       "import": [

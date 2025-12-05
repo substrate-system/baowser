@@ -1,6 +1,5 @@
 import { test } from '@substrate-system/tapzero'
 import {
-    verify,
     createVerifier,
     createEncoder,
     getRootLabel
@@ -15,8 +14,6 @@ if (isNode) {
     const __filename = fileURLToPath(import.meta.url)
     __dirname = path.dirname(__filename)
 }
-
-const CHUNK_SIZE = 2 * 1024  // 2KB chunks for faster tests
 
 test('getRootLabel returns root hash', async t => {
     const data = generateTestData(5 * 1024)  // 5KB
