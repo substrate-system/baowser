@@ -4,8 +4,8 @@
 [![module](https://img.shields.io/badge/module-ESM%2FCJS-blue?style=flat-square)](README.md)
 [![semantic versioning](https://img.shields.io/badge/semver-2.0.0-blue?logo=semver&style=flat-square)](https://semver.org/)
 [![Common Changelog](https://nichoth.github.io/badge/common-changelog.svg)](./CHANGELOG.md)
-[![install size](https://flat.badgen.net/packagephobia/install/@substrate-system/baowser)](https://packagephobia.com/result?p=@substrate-system/baowser)
-[![gzip size](https://img.shields.io/bundlephobia/minzip/@substrate-system/baowser?style=flat-square)](https://bundlephobia.com/@substrate-system/name/package/baowser)
+[![install size](https://flat.badgen.net/packagephobia/install/@substrate-system/baowser?v=2)](https://packagephobia.com/result?p=@substrate-system/baowser)
+[![gzip size](https://flat.badgen.net/bundlephobia/minzip/@substrate-system/baowser)](https://bundlephobia.com/package/@substrate-system/baowser)
 [![license](https://img.shields.io/badge/license-Big_Time-blue?style=flat-square)](LICENSE)
 
 
@@ -14,6 +14,11 @@ Streaming hash-based verification in the browser.
 This is based on the [`bao` library](https://github.com/oconnor663/bao). That's
 where the name comes from. Also, look at
 [bab](https://github.com/worm-blossom/bab).
+
+This is incremental verification for the browser. You can start a
+streaming download, and verify it is correct before you have downloaded the
+entire file. You only need to know the "root hash" ahead of time, and then
+you can verify each piece of the downlaod as it arrives.
 
 [See a live demo](https://substrate-system.github.io/baowser/)
 
@@ -99,7 +104,7 @@ const encodedStream = createEncoder(chunkSize, fileData)
 
 ### Verification (Client-side)
 
-The root hash is the only trusted input. The 32-byte hash is sufficient
+The root hash is the only trusted input. This 32-byte hash is sufficient
 for incremental verification. At each chunk in the stream,
 you can prove that the data corresponds to the root hash you requested.
 
@@ -176,7 +181,7 @@ const { write } = require('@substrate-system/baowser/fs')
 
 The encoding is a Merkle tree where hash labels are interleaved
 with data chunks in depth-first order.
-**The root hash (32 bytes) is your ONLY trusted input**.
+**The root hash (32 bytes) is your only trusted input**.
 
 The stream contains all verification metadata (child node hashes),
 and that metadata is itself verified against the root hash during
