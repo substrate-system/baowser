@@ -132,7 +132,7 @@ const Example:FunctionComponent = function () {
                 hashes from the data and comparing them against the expected labels
                 in the stream. Each verification step chains up to ultimately verify
                 against the trusted root hash. This enables true incremental
-                verification - Bob can detect corruption as soon as a corrupted chunk
+                verification - Bob can detect corruption as soon as the chunk
                 is processed ${EM_DASH} he doesn't need to download the entire file.
             </p>
             <p>
