@@ -29,8 +29,8 @@ where the name comes from. Also, look at
   * [ESM](#esm)
   * [Common JS](#common-js)
 - [How It Works](#how-it-works)
-  * [Complete Example](#complete-example)
-  * [How Verification Works](#how-verification-works)
+- [Node.js API](#nodejs-api)
+  * [write(dir, data, options)](#writedir-data-options)
   * [Error Handling](#error-handling)
 - [See Also](#see-also)
   * [Some Important Dependencies](#some-important-dependencies)
@@ -49,8 +49,30 @@ npm i -S @substrate-system/baowser
 
 ### Encoding (Server-side)
 
+#### Option 1: Using the `write` helper (easiest)
+
+The `write` function provides content-addressed storage - it encodes your data and saves it to a file named by its hash:
+
 ```ts
-import * as fs from 'node:fs'
+import { write } from '@substrate-system/baowser/fs'
+
+// Write data to a content-addressed file
+const { rootHash, filePath } = await write(
+  './data',  // Directory
+  Buffer.from('hello world'),  // Data (Buffer, Uint8Array, or ReadableStream)
+  { chunkSize: 1024 }
+)
+
+console.log(`File: ${filePath}`)  // ./data/abc123...
+console.log(`Hash: ${rootHash}`)  // abc123...
+
+// Publish rootHash via trusted channel (IPFS CID, database, etc.)
+// Serve the file at filePath to clients
+```
+
+#### Option 2: Manual encoding (more control)
+
+```ts
 import {
   createEncoder,
   getRootLabel
@@ -58,7 +80,6 @@ import {
 
 // Your file data
 const fileData = new Uint8Array([/* ... */])
-// const fileData = await fs.readFile('./foobar.txt')
 const chunkSize = 1024 // 1KB chunks
 
 // Get the root hash - this is your content identifier
@@ -69,9 +90,6 @@ const encodedStream = createEncoder(chunkSize, fileData)
 
 // Publish the root hash via a trusted channel (IPFS CID, database, etc.)
 // Stream the encodedStream to clients
-
-// server example here
-
 ```
 
 ### Verification (Client-side)
@@ -118,6 +136,8 @@ This exposes ESM and common JS via
 [package.json `exports` field](https://nodejs.org/api/packages.html#exports).
 
 ### ESM
+
+**Main module** (browser and Node.js):
 ```js
 import {
   createEncoder,
@@ -127,7 +147,14 @@ import {
 } from '@substrate-system/baowser'
 ```
 
+**Node.js file system helpers** (server-side only):
+```js
+import { write } from '@substrate-system/baowser/fs'
+```
+
 ### Common JS
+
+**Main module**:
 ```js
 const {
   createEncoder,
@@ -135,6 +162,11 @@ const {
   createVerifier,
   verify
 } = require('@substrate-system/baowser')
+```
+
+**Node.js file system helpers**:
+```js
+const { write } = require('@substrate-system/baowser/fs')
 ```
 
 ## How It Works
@@ -152,6 +184,50 @@ which ultimately chain up to verify against the root hash.
 If any hash does not match during verification,
 the stream throws an error and aborts immediately, before the download
 is complete.
+
+
+## Node API
+
+### `write(dir, data, options)`
+
+Encode data and write it to a file named by its root hash.
+
+```ts
+async function write (
+    dir:string,
+    data:Buffer|Uint8Array|ReadableStream<Uint8Array>,
+    { chunkSize = 1024 }:{ chunkSize?:number } = {}
+):Promise<{ rootHash:string; filePath:string }>
+```
+
+#### `write` Example
+
+```ts
+import { write } from '@substrate-system/baowser/fs'
+
+// Write with Buffer
+const result1 = await write('./data', Buffer.from('hello'))
+
+// Write with Uint8Array
+const data = new Uint8Array([1, 2, 3, 4, 5])
+const result2 = await write('./data', data, { chunkSize: 512 })
+
+// Write via ReadableStream
+const stream = fs.createReadStream('./input.txt')
+const nodeStream = stream[Symbol.asyncIterator] ?
+  Readable.toWeb(stream) : stream
+const result3 = await write('./data', nodeStream)
+
+
+console.log(result3.rootHash)  // "abc123..."
+console.log(result3.filePath)  // "./data/abc123..."
+```
+
+**Features:**
+- **Content-addressed storage**: Files are automatically named by their hash
+- **Automatic directory creation**: Creates directories recursively if they don't exist
+- **Multiple input types**: Accepts Buffer, Uint8Array, or ReadableStream
+- **Deterministic**: Same data always produces the same hash and filename
 
 ### Error Handling
 
