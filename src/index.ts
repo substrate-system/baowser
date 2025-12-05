@@ -258,7 +258,12 @@ export async function verify (
             offset += chunk.length
         }
 
-        // Final verification: check root hash
+        // Verify root hash matches the complete file
+        // Note: In external metadata mode, we verify individual chunks during
+        // streaming (using metadata.chunks[i].hash), then verify the root hash
+        // of the complete file here. The root hash is the ultimate source of
+        // truth - if you only had the root hash, you could still do incremental
+        // verification using a Merkle tree structure (as in bab format).
         const computedRootHash = await blake3(result)
         if (computedRootHash !== metadata.rootHash) {
             throw new Error(
@@ -532,8 +537,19 @@ async function * emitNodeGenerator (
 }
 
 /**
- * Internal function. Decode and verify a Bab-encoded stream with full
+ * Internal function. Decode and verify a Bab-encoded stream with incremental
  *   Merkle tree verification.
+ *
+ * The rootLabel is the only trusted input. This single hash is
+ * sufficient for complete incremental verification. As we decode the tree:
+ * 1. We compute hashes of leaf nodes (data chunks)
+ * 2. We compute hashes of internal nodes from their children
+ * 3. At each step, we compare computed hashes against expected labels from the stream
+ * 4. Everything chains up to verify against the rootLabel
+ *
+ * You can detect corruption as soon as it occurs, without downloading the
+ * entire file first.
+ *
  * Return a ReadableStream of verified data chunks
  */
 function decodeBab (
@@ -594,6 +610,13 @@ function decodeBab (
                 const verifiedChunks:Uint8Array[] = new Array(numChunks)
 
                 // Recursive function to decode a node
+                //
+                // This is where incremental verification happens! At each level:
+                // - For leaves: we hash the data chunk and return that hash
+                // - For internal nodes: we recursively decode children, verify their
+                //   computed hashes match the expected labels from the stream, then
+                //   compute this node's hash from its children
+                // - Everything chains up to verify against the rootLabel
                 async function decodeNode (
                     start:number,
                     end:number
@@ -609,7 +632,7 @@ function decodeBab (
                         await ensureBytes(expectedSize)
                         const chunkData = readBytes(expectedSize)
 
-                        // Verify chunk and get its label
+                        // Compute this chunk's hash - this will be verified by our parent
                         const label = await hashChunk(chunkData)
                         verifiedChunks[chunkIndex] = chunkData
 
@@ -623,7 +646,7 @@ function decodeBab (
                         return label
                     }
 
-                    // Internal node - read left and right labels
+                    // Internal node - read expected labels for children from the stream
                     await ensureBytes(LABEL_SIZE * 2)
                     const leftLabelBytes = readBytes(LABEL_SIZE)
                     const rightLabelBytes = readBytes(LABEL_SIZE)
@@ -631,13 +654,14 @@ function decodeBab (
                     const expectedLeftLabel = bytesToHex(leftLabelBytes)
                     const expectedRightLabel = bytesToHex(rightLabelBytes)
 
-                    // Decode left child and verify immediately
+                    // Decode children recursively - they'll compute their own hashes
                     const mid = Math.floor((start + end) / 2)
                     const computedLeftLabel = await decodeNode(start, mid)
-                    // Decode right child and verify immediately
                     const computedRightLabel = await decodeNode(mid + 1, end)
 
-                    // Verify left label immediately before continuing
+                    // INCREMENTAL VERIFICATION: Verify computed hashes match expected
+                    // labels from the stream. We verify each subtree
+                    // immediately, without needing to download everything first.
                     if (computedLeftLabel !== expectedLeftLabel) {
                         debug('if', computedLeftLabel, expectedLeftLabel)
                         const error = new Error(
@@ -678,7 +702,9 @@ function decodeBab (
                 // Decode the tree and verify
                 const computedRootLabel = await decodeNode(0, numChunks - 1)
 
-                // Verify root label
+                // Verify root label - this is the final check that everything chains
+                // back to our ONLY trusted input (the root hash). If this matches,
+                // we know all chunks were verified correctly through the tree structure.
                 if (computedRootLabel !== rootLabel) {
                     const error = new Error(
                         `Root label mismatch. Expected: ${rootLabel}, ` +

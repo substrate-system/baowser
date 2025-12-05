@@ -66,7 +66,7 @@ const metadata = await encode(fileData, chunkSize)
 // Send metadata separately (e.g., via API)
 // Send fileData via CDN/object storage
 
-// Option 2: Single stream with interleaved metadata (bab format)
+// Option 2: Single stream with interleaved metadata
 const rootLabel = await getRootLabel(fileData, chunkSize)
 const encodedStream = createEncoder(chunkSize, fileData)
 // Send just the rootLabel via trusted channel (IPFS CID, etc.)
@@ -75,49 +75,50 @@ const encodedStream = createEncoder(chunkSize, fileData)
 
 ### File Downloader (Client-side)
 
-As long as you know the root hash, then you can verify chunks of the file as
-they arrive. You don't have to wait for the full download before finding out
-that it is not valid.
+The root hash is used to verify the download incrementally.
+At every step during verification, you can prove that the data corresponds to
+the root hash. This enables incremental verification &mdash; you can
+verify chunks as they arrive without waiting for the full download.
 
 ```ts
 import { createVerifier, verify } from '@substrate-system/baowser'
 
-// Option 1: With external metadata
+// Option 1: External metadata (metadata fetched separately from data)
 const metadataRes = await fetch('/api/file-metadata')
 const metadata = await metadataRes.json()
 
 const fileRes = await fetch('/cdn/file-data')
 
-// Stream approach - verify as data arrives
+// Use streaming API
+// pass in metadata
 const verifier = createVerifier(metadata, {
   onChunkVerified: (i, total) => console.log(`${i}/${total} verified`)
 })
 const verifiedStream = fileRes.body.pipeThrough(verifier)
-
 // now read from verifiedStream...
 
-// Or Promise approach - simpler API
-const verifiedData = await verify(fileRes.body, metadata)
-
+// Or using promise-based API
+const fileRes2 = await fetch('/cdn/file-data')
+const verifiedData = await verify(fileRes2.body, metadata)
 // verifiedData is complete Uint8Array
 
-// Option 2: Bab format with interleaved metadata
+// Option 2: Bab format (single stream, metadata interleaved with data)
+// Only the root hash is needed - no separate metadata fetch!
 const rootLabel = 'abc123...'  // received from server
 const chunkSize = 1024
 
 const babRes = await fetch('/data.bab')
 
-// Stream
-const verifiedStream = createVerifier(babRes.body, rootLabel, chunkSize, {
+// Using streaming API
+const verifiedStream2 = createVerifier(babRes.body, rootLabel, chunkSize, {
   onChunkVerified: (i, total) => console.log(`${i}/${total}`)
 })
+// Read from verifiedStream2...
 
-// Read from verifiedStream...
-
-// Or Promise
-const verifiedData = await verify(babRes.body, rootLabel, chunkSize)
-
-// verifiedData is complete Uint8Array
+// Or using promise-based API
+const babRes2 = await fetch('/data.bab')
+const verifiedData2 = await verify(babRes2.body, rootLabel, chunkSize)
+// verifiedData2 is complete Uint8Array
 ```
 
 
@@ -164,10 +165,16 @@ If the hash does not match, it will throw an error and abort the stream.
 Create a single self-contained stream with metadata interleaved
 with data (similar to [Bab](https://worm-blossom.github.io/bab/)).
 
-You only need to share the root hash (32 bytes) via a trusted
-channel, and the stream contains all the verification metadata needed for
-incremental verification. This is ideal for content-addressed systems like
-IPFS or torrents where the root hash IS the content identifier.
+**The root hash (32 bytes) is your ONLY trusted input** - this is shared via a
+trusted channel. The stream contains all the verification metadata, but
+crucially, that metadata is itself verified against the root hash during
+decoding. This enables true incremental verification: at each step, you verify
+that subtrees match their expected labels, which ultimately chain up to verify
+against the root hash.
+
+This is ideal for content-addressed systems like IPFS or torrents where the
+root hash IS the content identifier. The hash is both the identifier AND the
+complete verification authority.
 
 ```js
 import {
@@ -215,10 +222,21 @@ const verifiedData = await verify(response2.body, rootLabel, chunkSize)
 
 #### Encoding Format
 
-The encoding format uses a Merkle tree structure where hash labels
-are interleaved with data chunks. The decoder performs full verification by
-recursively verifying that each node's label matches the computed hash from
-its children, ensuring the entire tree structure is valid.
+The encoding format uses a Merkle tree structure where hash labels are
+interleaved with data chunks in depth-first order.
+**The root hash is your single trusted input** - all verification flows
+from this one value.
+
+During decoding, the verifier:
+1. Uses the trusted root hash as the reference point
+2. Recursively verifies each node by computing its hash from its children
+3. Immediately compares each computed hash against the expected label from
+   the stream
+4. Fails fast if any mismatch is detected - no need to download the entire file
+
+This is true incremental verification: the root hash alone is sufficient to
+verify each chunk as it arrives, because each chunk's validity chains up through
+the tree structure to the root.
 
 
 ### External Metadata

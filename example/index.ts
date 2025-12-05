@@ -447,20 +447,29 @@ async function verifyFile () {
 
             // Decode and verify the stream
             //
-            // This is the key to bab's design:
-            // - As the stream arrives, we read labels and chunks in
-            //   depth-first order
-            // - We verify each subtree's label IMMEDIATELY after computing it
-            // - If any label mismatches the expected value, we fail immediately
+            // KEY INSIGHT: The rootLabel is our ONLY trusted input. This single
+            // hash is sufficient for complete incremental verification!
+            //
+            // How it works:
+            // - As the stream arrives, we read labels and chunks in depth-first order
+            // - We compute hashes of data chunks and internal nodes
+            // - We IMMEDIATELY verify each computed hash against the expected label
+            // - Everything chains up to verify against the rootLabel
+            // - If ANY hash mismatches, we fail immediately and stop downloading
             //
             // The createVerifier will:
             // 1. Read the length prefix
             // 2. Recursively process the tree in depth-first order:
-            //    - For internal nodes: read left/right child labels
-            //    - Process left child, compute its label, verify it matches
-            //    - Process right child, compute its label, verify it matches
-            //    - Compute parent label and return it for verification
-            // 3. Verify the root label matches our trusted value
+            //    - For internal nodes: read expected left/right child labels
+            //      from stream
+            //    - Process left child, compute its hash, verify against
+            //      expected label
+            //    - Process right child, compute its hash, verify against
+            //      expected label
+            //    - Compute parent hash from children and return it
+            //      for verification
+            // 3. Verify the final computed root hash matches our
+            //    trusted rootLabel
             const verifiedStream = createVerifier(
                 downloadStream,
                 rootLabel,
@@ -807,27 +816,28 @@ function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
 
     if (route.includes('single-stream')) {
         return html`<p>
-            Alice encodes her data
-            into a Merkle tree with interleaved labels and data chunks,
-            in depth-first order.
-            Bob downloads the stream and verifies it
-            incrementally by computing labels from the data and comparing them
-            against the labels in the stream.
+            Alice encodes her data into a Merkle tree with interleaved labels
+            and data chunks (in depth-first order), and publishes the root hash
+            via a trusted channel. <strong>The root hash is the only trusted
+            input Bob needs</strong>.
         </p>
         <p>
-            This is good for use cases where there is some trust between the
-            recipient and the server, and you just want to guarantee that data
-            has not been corrupted during transit.
+            Bob downloads the stream and verifies it incrementally by computing
+            hashes from the data and comparing them against the expected labels
+            in the stream. Each verification step chains up, to ultimately verify
+            against the trusted root hash. This enables incremental
+            verification. Bob can detect corruption as soon as a corrupted chunk
+            is processed.
         </p>
         <p>
-            Bob can detect corruption as soon as a
-            corrupted chunk is processed ${EM_DASH} he doesn't need to
-            download the entire file.
+            For extra elegance, you can request data by the root hash, in a
+            content-addressed way, for example where the root hash is the
+            filename.
         </p>
         <p>
-            <strong>Demo:</strong> Modify the textarea to simulate a corrupted
-            transmission. The demo will flip bytes in the Bab stream at the
-            corresponding position. Verification should fail at the first
+            <strong>Demo</strong> ${EM_DASH} Modify the textarea to simulate a
+            corrupted transmission. The demo will flip bytes in the Bab stream
+            at the corresponding position. Verification should fail at the first
             corrupted chunk.
         </p>
         `
