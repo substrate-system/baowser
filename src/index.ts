@@ -4,25 +4,7 @@ import Debug from '@substrate-system/debug'
 const debug = Debug('baowser')
 
 /**
- * Metadata for a single chunk
- */
-export interface ChunkMetadata {
-    hash:string
-    size:number
-}
-
-/**
- * Complete metadata for encoded data with BLAKE3 hashes
- */
-export interface EncodedMetadata {
-    rootHash:string
-    fileSize:number
-    chunkSize:number
-    chunks:ChunkMetadata[]
-}
-
-/**
- * Options for the verifier transform stream
+ * Options for the verifier stream
  */
 export interface VerifierOptions {
     /**
@@ -37,249 +19,43 @@ export interface VerifierOptions {
 }
 
 /**
- * Internal function for simple chunk verification
- */
-function createSimpleVerifier (
-    metadata:EncodedMetadata,
-    options:VerifierOptions = {}
-):TransformStream<Uint8Array, Uint8Array> {
-    let buffer = new Uint8Array(0)
-    let currentChunkIndex = 0
-    let totalBytesProcessed = 0
-
-    return new TransformStream<Uint8Array, Uint8Array>({
-        async transform (chunk, controller) {
-            try {
-                // Add chunk to buffer
-                const newBuffer = new Uint8Array(buffer.length + chunk.length)
-                newBuffer.set(buffer, 0)
-                newBuffer.set(chunk, buffer.length)
-                buffer = newBuffer
-
-                // Process complete chunks from buffer
-                while (
-                    buffer.length >= metadata.chunkSize ||
-                    (currentChunkIndex === metadata.chunks.length - 1 &&
-                        buffer.length > 0)
-                ) {
-                    if (currentChunkIndex >= metadata.chunks.length) {
-                        throw new Error(
-                            'Received more data than expected ' +
-                            `(${totalBytesProcessed} bytes)`
-                        )
-                    }
-
-                    const expectedChunk = metadata.chunks[currentChunkIndex]
-                    const chunkData = buffer.slice(0, expectedChunk.size)
-
-                    // Verify chunk hash
-                    const computedHash = await blake3(chunkData)
-                    if (computedHash !== expectedChunk.hash) {
-                        const error = new Error(
-                            `Chunk ${currentChunkIndex + 1} hash mismatch. ` +
-                            `Expected: ${expectedChunk.hash}, ` +
-                            `Got: ${computedHash}`
-                        )
-                        throw error
-                    }
-
-                    // Chunk verified - pass it through
-                    controller.enqueue(chunkData)
-                    totalBytesProcessed += chunkData.length
-
-                    // Notify callback
-                    if (options.onChunkVerified) {
-                        options.onChunkVerified(
-                            currentChunkIndex + 1,
-                            metadata.chunks.length
-                        )
-                    }
-
-                    // Remove processed chunk from buffer
-                    buffer = buffer.slice(expectedChunk.size)
-                    currentChunkIndex++
-
-                    // If this was the last chunk, ensure we've processed all data
-                    if (
-                        currentChunkIndex === metadata.chunks.length &&
-                        buffer.length > 0
-                    ) {
-                        throw new Error(
-                            `Extra data after last chunk: ${buffer.length} bytes`
-                        )
-                    }
-                }
-            } catch (error) {
-                if (options.onError && error instanceof Error) {
-                    options.onError(error)
-                }
-                throw error
-            }
-        },
-
-        async flush () {
-            // Verify all chunks were received
-            if (currentChunkIndex !== metadata.chunks.length) {
-                const error = new Error(
-                    `Incomplete stream: received ${currentChunkIndex} of ` +
-                    `${metadata.chunks.length} chunks`
-                )
-                if (options.onError) {
-                    options.onError(error)
-                }
-                throw error
-            }
-
-            // Verify no remaining data in buffer
-            if (buffer.length > 0) {
-                const error = new Error(
-                    `Unexpected remaining data: ${buffer.length} bytes`
-                )
-                if (options.onError) {
-                    options.onError(error)
-                }
-                throw error
-            }
-        }
-    })
-}
-
-/**
- * Create a verifier stream for chunk-by-chunk verification with
- *   explicit metadata
- *
- * @param metadata - The metadata containing expected hashes
- * @param options - Optional callbacks for verification events
- * @returns A TransformStream that verifies chunks
- */
-export function createVerifier (
-    metadata:EncodedMetadata,
-    options?:VerifierOptions
-):TransformStream<Uint8Array, Uint8Array>
-
-/**
  * Create a verifier stream that decodes Bab-encoded data with
  *   interleaved metadata.
  *
- * @param stream - The encoded stream to decode
- * @param rootLabel - The expected root hash for verification
+ * @param stream - The encoded stream to decode and verify
+ * @param rootHash - The expected root hash for verification (your ONLY trusted input)
  * @param chunkSize - The chunk size used during encoding
  * @param options - Optional callbacks for verification events
  * @returns A ReadableStream of verified data chunks
  */
 export function createVerifier (
     stream:ReadableStream<Uint8Array>,
-    rootLabel:string,
+    rootHash:string,
     chunkSize:number,
     options?:VerifierOptions
-):ReadableStream<Uint8Array>
-
-export function createVerifier (
-    metadataOrStream:EncodedMetadata|ReadableStream<Uint8Array>,
-    optionsOrRootLabel?:VerifierOptions|string,
-    chunkSize?:number,
-    options?:VerifierOptions
-):TransformStream<Uint8Array, Uint8Array>|ReadableStream<Uint8Array> {
-    // Case 1: Simple chunk verification (metadata provided)
-    if (!('getReader' in metadataOrStream)) {
-        const metadata = metadataOrStream as EncodedMetadata
-        const opts = (optionsOrRootLabel as VerifierOptions|undefined) || {}
-        return createSimpleVerifier(metadata, opts)
-    }
-
-    // Case 2: Bab decoding (stream + rootLabel + chunkSize)
-    const stream = metadataOrStream as ReadableStream<Uint8Array>
-    const rootLabel = optionsOrRootLabel as string
-    return decodeBab(stream, rootLabel, chunkSize!, options)
+):ReadableStream<Uint8Array> {
+    return decodeBab(stream, rootHash, chunkSize, options)
 }
 
 /**
- * Verify a stream and return the complete verified data
+ * Verify a Bab-encoded stream and return the complete verified data.
  *
- * @param stream - The ReadableStream to verify
- * @param metadata - The metadata containing expected hashes
- * @param options - Optional callbacks for verification events
- * @returns {Promise<Uint8Array>} Promise resolving to the complete data
- */
-export async function verify (
-    stream:ReadableStream<Uint8Array>,
-    metadata:EncodedMetadata,
-    options?:VerifierOptions
-):Promise<Uint8Array>
-
-/**
- * Verify a Bab-encoded stream with interleaved metadata.
+ * This is a convenience function that handles streaming, verification,
+ * and collecting chunks into a single Uint8Array.
  *
  * @param stream - The encoded stream to decode and verify
- * @param rootLabel - The expected root hash for verification
+ * @param rootHash - The expected root hash for verification (your ONLY trusted input)
  * @param chunkSize - The chunk size used during encoding
  * @param options - Optional callbacks for verification events
- * @returns {Promise<Uint8Array>} Promise resolving to the complete data
+ * @returns {Promise<Uint8Array>} Promise resolving to the complete verified data
  */
 export async function verify (
     stream:ReadableStream<Uint8Array>,
-    rootLabel:string,
+    rootHash:string,
     chunkSize:number,
     options?:VerifierOptions
-):Promise<Uint8Array>
-
-export async function verify (
-    stream:ReadableStream<Uint8Array>,
-    metadataOrRootLabel:EncodedMetadata|string,
-    optionsOrChunkSize?:VerifierOptions|number,
-    options?:VerifierOptions
 ):Promise<Uint8Array> {
-    // Case 1: Simple verification with metadata
-    if (typeof metadataOrRootLabel !== 'string') {
-        const metadata = metadataOrRootLabel as EncodedMetadata
-        const opts = (optionsOrChunkSize as VerifierOptions | undefined) || {}
-        const verifiedStream = stream.pipeThrough(
-            createSimpleVerifier(metadata, opts)
-        )
-        const reader = verifiedStream.getReader()
-        const chunks:Uint8Array[] = []
-
-        try {
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                chunks.push(value)
-            }
-        } finally {
-            reader.releaseLock()
-        }
-
-        // Combine all chunks
-        const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-        const result = new Uint8Array(totalLength)
-        let offset = 0
-        for (const chunk of chunks) {
-            result.set(chunk, offset)
-            offset += chunk.length
-        }
-
-        // Verify root hash matches the complete file
-        // Note: In external metadata mode, we verify individual chunks during
-        // streaming (using metadata.chunks[i].hash), then verify the root hash
-        // of the complete file here. The root hash is the ultimate source of
-        // truth - if you only had the root hash, you could still do incremental
-        // verification using a Merkle tree structure (as in bab format).
-        const computedRootHash = await blake3(result)
-        if (computedRootHash !== metadata.rootHash) {
-            throw new Error(
-                `Root hash mismatch. Expected: ${metadata.rootHash}, ` +
-                `Got: ${computedRootHash}`
-            )
-        }
-
-        return result
-    }
-
-    // Case 2: Bab decoding with interleaved metadata
-    const rootLabel = metadataOrRootLabel as string
-    const chunkSize = optionsOrChunkSize as number
-    const opts = options || {}
-    const verifiedStream = decodeBab(stream, rootLabel, chunkSize, opts)
+    const verifiedStream = decodeBab(stream, rootHash, chunkSize, options)
     const reader = verifiedStream.getReader()
     const chunks:Uint8Array[] = []
 
@@ -466,42 +242,6 @@ export function createEncoder (
             controller.close()
         }
     })
-}
-
-/**
- * Encodes data by chunking it and creating BLAKE3 hashes for each chunk
- *
- * @param {Uint8Array} data - The data to encode
- * @param {number} chunkSize - Size of each chunk in bytes
- * @returns {Promise<EncodedMetadata>} Metadata containing root hash
- *          and chunk hashes
- */
-export async function encode (
-    data:Uint8Array,
-    chunkSize:number
-):Promise<EncodedMetadata> {
-    // Calculate root hash of entire data
-    const rootHash = await blake3(data)
-
-    // Break into chunks and hash each
-    const chunks:ChunkMetadata[] = []
-    for (let offset = 0; offset < data.length; offset += chunkSize) {
-        const end = Math.min(offset + chunkSize, data.length)
-        const chunk = data.slice(offset, end)
-        const chunkHash = await blake3(chunk)
-
-        chunks.push({
-            size: chunk.length,
-            hash: chunkHash
-        })
-    }
-
-    return {
-        rootHash,
-        fileSize: data.length,
-        chunkSize,
-        chunks
-    }
 }
 
 /**

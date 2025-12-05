@@ -22,17 +22,16 @@ where the name comes from. Also, look at [bab](https://github.com/worm-blossom/b
 
 - [Install](#install)
 - [Example](#example)
-  * [File Provider (Server-side)](#file-provider-server-side)
-  * [File Downloader (Client-side)](#file-downloader-client-side)
+  * [Encoding (Server-side)](#encoding-server-side)
+  * [Verification (Client-side)](#verification-client-side)
 - [API](#api)
   * [ESM](#esm)
   * [Common JS](#common-js)
 - [Use](#use)
-  * [Metadata](#metadata)
-  * [Single Stream (metadata + data)](#single-stream-metadata--data)
-  * [External Metadata](#external-metadata)
-  * [Verify data](#verify-data)
-  * [`verify`](#verify)
+  * [How It Works](#how-it-works)
+  * [Complete Example](#complete-example)
+  * [How Verification Works](#how-verification-works)
+  * [Error Handling](#error-handling)
 - [See Also](#see-also)
   * [Some Important Dependencies](#some-important-dependencies)
 
@@ -48,11 +47,10 @@ npm i -S @substrate-system/baowser
 
 ## Example
 
-### File Provider (Server-side)
+### Encoding (Server-side)
 
 ```ts
 import {
-  encode,
   createEncoder,
   getRootLabel
 } from '@substrate-system/baowser'
@@ -61,64 +59,46 @@ import {
 const fileData = new Uint8Array([/* ... */])
 const chunkSize = 1024 // 1KB chunks
 
-// Option 1: External metadata (good for databases/APIs)
-const metadata = await encode(fileData, chunkSize)
-// Send metadata separately (e.g., via API)
-// Send fileData via CDN/object storage
+// Get the root hash - this is your content identifier
+const rootHash = await getRootLabel(fileData, chunkSize)
 
-// Option 2: Single stream with interleaved metadata
-const rootLabel = await getRootLabel(fileData, chunkSize)
+// Create the encoded stream with interleaved metadata
 const encodedStream = createEncoder(chunkSize, fileData)
-// Send just the rootLabel via trusted channel (IPFS CID, etc.)
-// Stream the encodedStream to the client
+
+// Publish the root hash via a trusted channel (IPFS CID, database, etc.)
+// Stream the encodedStream to clients
 ```
 
-### File Downloader (Client-side)
+### Verification (Client-side)
 
-The root hash is used to verify the download incrementally.
-At every step during verification, you can prove that the data corresponds to
-the root hash. This enables incremental verification &mdash; you can
-verify chunks as they arrive without waiting for the full download.
+**Key Insight:** The root hash is your ONLY trusted input. This single 32-byte hash is sufficient for complete incremental verification. At every step during verification, you can prove that the data corresponds to the root hash you requested.
 
 ```ts
 import { createVerifier, verify } from '@substrate-system/baowser'
 
-// Option 1: External metadata (metadata fetched separately from data)
-const metadataRes = await fetch('/api/file-metadata')
-const metadata = await metadataRes.json()
-
-const fileRes = await fetch('/cdn/file-data')
-
-// Use streaming API
-// pass in metadata
-const verifier = createVerifier(metadata, {
-  onChunkVerified: (i, total) => console.log(`${i}/${total} verified`)
-})
-const verifiedStream = fileRes.body.pipeThrough(verifier)
-// now read from verifiedStream...
-
-// Or using promise-based API
-const fileRes2 = await fetch('/cdn/file-data')
-const verifiedData = await verify(fileRes2.body, metadata)
-// verifiedData is complete Uint8Array
-
-// Option 2: Bab format (single stream, metadata interleaved with data)
-// Only the root hash is needed - no separate metadata fetch!
-const rootLabel = 'abc123...'  // received from server
+// The root hash you're requesting (received via trusted channel)
+const rootHash = 'abc123...'
 const chunkSize = 1024
 
-const babRes = await fetch('/data.bab')
+const response = await fetch('/data.bab')
 
-// Using streaming API
-const verifiedStream2 = createVerifier(babRes.body, rootLabel, chunkSize, {
-  onChunkVerified: (i, total) => console.log(`${i}/${total}`)
+// Option 1: Using streaming API
+const verifiedStream = createVerifier(response.body, rootHash, chunkSize, {
+  onChunkVerified: (i, total) => console.log(`Verified ${i}/${total}`)
 })
-// Read from verifiedStream2...
 
-// Or using promise-based API
-const babRes2 = await fetch('/data.bab')
-const verifiedData2 = await verify(babRes2.body, rootLabel, chunkSize)
-// verifiedData2 is complete Uint8Array
+// Read from verifiedStream...
+const reader = verifiedStream.getReader()
+while (true) {
+  const { done, value } = await reader.read()
+  if (done) break
+  // Use verified chunk...
+}
+
+// Option 2: Using promise-based API (simpler)
+const response2 = await fetch('/data.bab')
+const verifiedData = await verify(response2.body, rootHash, chunkSize)
+// verifiedData is complete Uint8Array, fully verified
 ```
 
 
@@ -129,52 +109,34 @@ This exposes ESM and common JS via
 
 ### ESM
 ```js
-import { encode, createVerifier, verify } from 'baowser'
+import { createEncoder, getRootLabel, createVerifier, verify } from 'baowser'
 ```
 
 ### Common JS
 ```js
-const { encode, createVerifier, verify } = require('baowser')
+const { createEncoder, getRootLabel, createVerifier, verify } = require('baowser')
 ```
 
 ## Use
 
-This uses browser native streams.
+This uses browser native streams and the [Bab](https://worm-blossom.github.io/bab/) encoding format.
 
-### Metadata
+### How It Works
 
-Metadata can be generated as a separate object from the blob. This makes sense
-for some use cases:
+The encoding uses a Merkle tree structure where hash labels are interleaved with data chunks in depth-first order. **The root hash (32 bytes) is your ONLY trusted input** - this is shared via a trusted channel (IPFS CID, database, content-addressed identifier, etc.).
 
-* Store metadata in a database but data in object storage
-* Transmit metadata via different channels (API vs CDN)
-* File transfer with zero trust between participants
+The stream contains all the verification metadata (child node hashes), but crucially, that metadata is itself verified against the root hash during decoding. This enables true incremental verification: at each step, you verify that subtrees match their expected labels, which ultimately chain up to verify against the root hash.
 
-Or the metadata can be interleaved with the blob content. In that case only
-a single stream is required for verification (no external metadata).
+**Key properties:**
+- Content-addressed: The root hash IS the content identifier
+- Incremental verification: Detect corruption immediately as chunks arrive
+- Fail-fast: Download stops as soon as any mismatch is detected
+- Space-efficient: Only need to share a 32-byte hash
+- Trust-minimized: The hash is both the identifier AND the complete verification authority
 
-The stream uses a Merkle tree structure with interleaved metadata. You want
-to use `createVerifier` with the bab format. It transforms the incoming stream
-to a standard blob stream (without metadata), and also verifies that the data
-is correct.
+If any hash does not match during verification, the stream throws an error and aborts immediately.
 
-If the hash does not match, it will throw an error and abort the stream.
-
-### Single Stream (metadata + data)
-
-Create a single self-contained stream with metadata interleaved
-with data (similar to [Bab](https://worm-blossom.github.io/bab/)).
-
-**The root hash (32 bytes) is your ONLY trusted input** - this is shared via a
-trusted channel. The stream contains all the verification metadata, but
-crucially, that metadata is itself verified against the root hash during
-decoding. This enables true incremental verification: at each step, you verify
-that subtrees match their expected labels, which ultimately chain up to verify
-against the root hash.
-
-This is ideal for content-addressed systems like IPFS or torrents where the
-root hash IS the content identifier. The hash is both the identifier AND the
-complete verification authority.
+### Complete Example
 
 ```js
 import {
@@ -184,260 +146,83 @@ import {
   verify
 } from '@substrate-system/baowser'
 
-// On the server: encode data into Bab format
+// ============================================================================
+// SERVER SIDE: Encode data into Bab format
+// ============================================================================
+
 const data = new Uint8Array([/* ... */])  // your data
 const chunkSize = 1024
 
-// Get the root label (hash) - this is published via trusted channel
-const rootLabel = await getRootLabel(data, chunkSize)
+// Get the root hash - this is your content identifier
+const rootHash = await getRootLabel(data, chunkSize)
 
-// Create the encoded stream
+// Create the encoded stream with interleaved metadata
 const encodedStream = createEncoder(chunkSize, data)
 
+// Publish rootHash via trusted channel (IPFS CID, database, etc.)
+// Stream encodedStream to clients
 
-// ------- client side -------
 
+// ============================================================================
+// CLIENT SIDE: Download and verify using ONLY the root hash
+// ============================================================================
 
-// Option 1: Stream approach - decode and verify as data arrives
-const response = await fetch('/data')
-const verifiedStream = createVerifier(response.body, rootLabel, chunkSize, {
-  onChunkVerified: (i, total) => console.log(`${i}/${total}`),
+const rootHash = 'abc123...'  // received via trusted channel
+const chunkSize = 1024
+
+// Option 1: Streaming API - verify as data arrives
+const response = await fetch('/data.bab')
+const verifiedStream = createVerifier(response.body, rootHash, chunkSize, {
+  onChunkVerified: (i, total) => console.log(`Verified ${i}/${total}`),
   onError: (err) => console.error('Verification failed:', err)
 })
 
-// Read verified data
+// Read verified chunks
 const reader = verifiedStream.getReader()
 const chunks = []
 while (true) {
   const { done, value } = await reader.read()
   if (done) break
-  chunks.push(value)
+  chunks.push(value)  // Only verified chunks reach here
 }
 
-// Option 2: Use a promise
+// Option 2: Promise-based API - simpler interface
 const response2 = await fetch('/data.bab')
-const verifiedData = await verify(response2.body, rootLabel, chunkSize)
-// verifiedData is a Uint8Array with all data
+const verifiedData = await verify(response2.body, rootHash, chunkSize, {
+  onChunkVerified: (i, total) => console.log(`${i}/${total}`)
+})
+// verifiedData is a Uint8Array with all verified data
 ```
 
-#### Encoding Format
-
-The encoding format uses a Merkle tree structure where hash labels are
-interleaved with data chunks in depth-first order.
-**The root hash is your single trusted input** - all verification flows
-from this one value.
+### How Verification Works
 
 During decoding, the verifier:
 1. Uses the trusted root hash as the reference point
-2. Recursively verifies each node by computing its hash from its children
-3. Immediately compares each computed hash against the expected label from
-   the stream
-4. Fails fast if any mismatch is detected - no need to download the entire file
+2. Recursively processes the Merkle tree in depth-first order
+3. Computes hashes of each data chunk
+4. Computes hashes of each internal node from its children
+5. Immediately compares each computed hash against the expected label from the stream
+6. Fails fast if any mismatch is detected - stops downloading immediately
 
-This is true incremental verification: the root hash alone is sufficient to
-verify each chunk as it arrives, because each chunk's validity chains up through
-the tree structure to the root.
+**This is true incremental verification:** The root hash alone is sufficient to verify each chunk as it arrives, because each chunk's validity chains up through the tree structure to the root.
 
+### Error Handling
 
-### External Metadata
-
-First, encode your data to generate chunk metadata. This would happen
-on the machine that is providing the file (a server).
-
-```js
-import { encode } from '@substrate-system/baowser'
-
-const data = new Uint8Array([...])  // your data
-const chunkSize = 1024
-
-const metadata = await encode(data, chunkSize)
-
-// metadata contains:
-// - rootHash: BLAKE3 hash of full blob
-// - chunks: array of { hash, size } for each chunk
-// - fileSize: total size
-// - chunkSize: chunk size used
-```
-
-### Verify data
-
-Use the function `createVerifier` to create a
-[`TransformStream`](https://developer.mozilla.org/en-US/docs/Web/API/TransformStream)
-and verify the stream as it downloads.
-
-#### Piping through the verifier
+When a hash mismatch is detected:
+1. The `onError` callback is invoked (if provided)
+2. An error is thrown from the stream
+3. The stream aborts - no more data is downloaded or processed
 
 ```js
-import { createVerifier } from '@substrate-system/baowser'
-
-// Fetch metadata from your API
-const metadataRes = await fetch('/api/file-metadata')
-const metadata = await metadataRes.json()
-
-// Fetch the actual file data
-const response = await fetch('/cdn/file-data.jpg')
-const unverifiedStream = response.body  // ReadableStream<Uint8Array>
-
-// Create a TransformStream verifier
-const verifier = createVerifier(metadata, {
-  onChunkVerified: (chunkIndex, totalChunks) => {
-    console.log(`✓ Chunk ${chunkIndex}/${totalChunks} verified`)
-  },
-  onError: (error) => {
-    // Called immediately when verification fails
-    console.error('Verification error:', error.message)
-  }
-})
-
-// Pipe the unverified stream through the verifier
-// This returns a new ReadableStream with verified data
-const verifiedStream = unverifiedStream.pipeThrough(verifier)
-
-// Read from the verified stream
-const reader = verifiedStream.getReader()
-const chunks = []
-
 try {
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)  // Only verified chunks reach here
-  }
-
-  // Combine chunks into complete data
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-  const verifiedData = new Uint8Array(totalLength)
-  let offset = 0
-  for (const chunk of chunks) {
-    verifiedData.set(chunk, offset)
-    offset += chunk.length
-  }
-
-  console.log('File fully verified!', verifiedData.length, 'bytes')
-
-  // Use the verified data
-  const blob = new Blob([verifiedData], { type: 'image/jpeg' })
-  const url = URL.createObjectURL(blob)
-  // ... use the blob
-
+  const verifiedData = await verify(stream, rootHash, chunkSize, {
+    onError: (err) => console.error('Verification failed:', err)
+  })
+  // Use verified data...
 } catch (error) {
-  // If verification fails, reader.read() will throw
-  console.error('Stream aborted due to verification failure:', error.message)
-  // The download is automatically stopped - no more data is processed
-  throw error
-} finally {
-  reader.releaseLock()
-}
-```
-
-#### When a hash mismatch is detected
-
-1. The onError callback is invoked (if you provided one) with the error
-2. An error is thrown from the stream with a message like:
-   `Chunk 2 hash mismatch. Expected: abc123..., Got: def456...`
-3. This causes `reader.read()` to reject, triggering the catch block
-
-```js
-import { createVerifier } from '@substrate-system/baowser'
-
-// Create a ReadableStream (e.g., from fetch)
-const response = await fetch('/data.jpg')
-const stream = response.body
-
-// Create verifier with callbacks
-const verifier = createVerifier(metadata, {
-  onChunkVerified: (chunkIndex, totalChunks) => {
-    console.log(`Verified chunk ${chunkIndex}/${totalChunks}`)
-  },
-  onError: (error) => {
-    console.error('Verification failed:', error)
-  }
-})
-
-// Pipe through verifier
-const verifiedStream = stream.pipeThrough(verifier)
-
-// Collect all verified chunks
-const chunks = []
-const reader = verifiedStream.getReader()
-
-try {
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-  }
-} catch (error) {
-  // Verification failed - hash mismatch detected
   console.error('Stream verification failed:', error.message)
-  throw error  // Re-throw or handle as appropriate
-} finally {
-  reader.releaseLock()
+  // Handle error - stream has been aborted
 }
-
-// stream is complete now
-// combine chunks into complete data
-const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-const completeData = new Uint8Array(totalLength)
-let offset = 0
-for (const chunk of chunks) {
-  completeData.set(chunk, offset)
-  offset += chunk.length
-}
-
-// Now use the verified data.
-// Create a Blob and add it to the DOM.
-const blob = new Blob([completeData], { type: 'image/jpeg' })
-const blobUrl = URL.createObjectURL(blob)
-
-// Add to DOM
-const img = document.createElement('img')
-img.src = blobUrl
-document.body.appendChild(img)
-
-// Or trigger a download
-const link = document.createElement('a')
-link.href = blobUrl
-link.download = 'verified-data.jpg'
-link.click()
-
-// Clean up the object URL when done
-URL.revokeObjectURL(blobUrl)
-```
-
-### `verify`
-
-Use `verify` to verify and collect all data in one call. This is a
-convenience function that handles streaming, verification, and collecting
-the chunks into a single `Uint8Array`.
-
-```js
-import { verify } from '@substrate-system/baowser'
-
-// First, fetch the metadata (generated during encoding on the server)
-// The server would provide this
-const metadataResponse = await fetch('/data.metadata.json')
-const metadata = await metadataResponse.json()
-
-// Now fetch and verify the actual data
-const response = await fetch('/data.jpg')
-const verifiedData = await verify(response.body, metadata, {
-  onChunkVerified: (i, total) => console.log(`${i}/${total}`),
-  onError: (err) => console.log('oh no', err.message)
-})
-
-// verifiedData is a Uint8Array with all verified data
-// Create a Blob and display the image
-const blob = new Blob([verifiedData], { type: 'image/jpeg' })
-const blobUrl = URL.createObjectURL(blob)
-
-// Add to DOM
-const img = document.createElement('img')
-img.src = blobUrl
-document.body.appendChild(img)
-
-// Clean up when done
-img.onload = () => URL.revokeObjectURL(blobUrl)
 ```
 
 ## See Also

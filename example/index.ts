@@ -1,17 +1,14 @@
 import { type FunctionComponent, render } from 'preact'
 import { html } from 'htm/preact'
-import Route from 'route-event'
 import { useRef, useEffect } from 'preact/hooks'
 import { blake3 } from '@nichoth/hash-wasm'
 import { type Signal, signal, useComputed } from '@preact/signals'
 import { humanBytes } from '@substrate-system/human-bytes'
 import llamaBase64 from './llama.jpg.base64'
 import {
-    encode,
     createVerifier,
     createEncoder,
-    getRootLabel,
-    type EncodedMetadata
+    getRootLabel
 } from '../src/index'
 import Debug from '@substrate-system/debug'
 import '@substrate-system/css-normalize'
@@ -41,7 +38,6 @@ interface Stats {
 
 const state:{
     chunkSize:Signal<number>;
-    encodedData:Signal<EncodedMetadata|null>;
     streamData:Signal<{
         rootLabel:string,
         stream:Uint8Array  // The encoded stream bytes
@@ -51,11 +47,8 @@ const state:{
     isEncoding:Signal<boolean>;
     isVerifying:Signal<boolean>;
     base64Text:Signal<string>;
-    path:Signal<string>;
 } = {
-    path: signal(location.pathname),
     chunkSize: signal(1024),
-    encodedData: signal(null),
     streamData: signal(null),
     logs: signal([]),
     stats: signal(null),
@@ -69,30 +62,7 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'staging') {
     window.state = state
 }
 
-const onRoute = Route()
-
-/**
- * Client-side routing
- */
-onRoute((path, data) => {
-    state.path.value = path
-
-    // restore scroll position on back/forward
-    if (data.popstate) {
-        return window.scrollTo(data.scrollX, data.scrollY)
-    }
-})
-
-const routes = [
-    {
-        path: '/',
-        text: 'External Metadata'
-    },
-    {
-        path: '/single-stream',
-        text: 'Single Stream'
-    }
-]
+// No routing needed - single mode only
 
 const Example:FunctionComponent = function () {
     const logContainerRef = useRef<HTMLDivElement>(null)
@@ -150,18 +120,33 @@ const Example:FunctionComponent = function () {
 
         <hr />
 
-        <nav class="routes">
-            <ul>
-                ${routes.map(r => {
-                    return html`<li class="nav${r.path === state.path.value ? ' active' : ''}">
-                        <a href="${r.path}">${r.text}</a>
-                    </li>`
-                })}
-            </ul>
-        </nav>
-
         <div class="explanation">
-            <${Explanation} route=${state.path.value} />
+            <p>
+                Alice encodes her data into a Merkle tree with interleaved labels
+                and data chunks (in depth-first order), and publishes the root hash
+                via a trusted channel. <strong>The root hash is the ONLY trusted
+                input Bob needs</strong> - it serves as both the content identifier
+                and the complete verification authority.
+            </p>
+            <p>
+                Bob downloads the stream and verifies it incrementally by computing
+                hashes from the data and comparing them against the expected labels
+                in the stream. Each verification step chains up to ultimately verify
+                against the trusted root hash. This enables true incremental
+                verification - Bob can detect corruption as soon as a corrupted chunk
+                is processed ${EM_DASH} he doesn't need to download the entire file.
+            </p>
+            <p>
+                The beauty of this approach: when you request data by its hash,
+                that hash IS your source of truth. At every step during verification,
+                you can prove the data corresponds to the hash you requested.
+            </p>
+            <p>
+                <strong>Demo:</strong> Modify the textarea to simulate a corrupted
+                transmission. The demo will flip bytes in the Bab stream at the
+                corresponding position. Verification should fail at the first
+                corrupted chunk.
+            </p>
         </div>
 
         <div class="content-preview">
@@ -204,14 +189,14 @@ const Example:FunctionComponent = function () {
             <button
                 onClick=${verifyFile}
                 disabled=${
-                    (!state.encodedData.value && !state.streamData.value) ||
+                    !state.streamData.value ||
                     state.isVerifying.value ||
                     state.isEncoding.value
                 }
             >
                 ${state.isVerifying.value ?
                     'Verifying...' :
-                    `Download & Verify ${EM_DASH} ${getRoute()?.text}`
+                    'Download & Verify'
                 }
             </button>
             <button
@@ -220,35 +205,6 @@ const Example:FunctionComponent = function () {
             >
                 Clear Log
             </button>
-        </div>
-
-        <div class="explanation">
-            ${state.path.value.includes('/single-stream') ?
-                html`<p>
-                    All verification data is included in the stream.
-                    You can veryify the chunks as they arrive.
-                </p>
-                ` :
-                html`<p>
-                    Here verification metadata is created as an external object.
-                    We create a transform stream with <code>
-                        createVerifier(metadata)
-                    </code>,${NBSP}
-                    and the stream uses the expected chunk size from the metadata
-                    to split the input into chunks, then it compares the computed
-                    hash with the hash for that chunk in the metadata.
-                </p>
-                <p>
-                    If the hash is ok, it passes the chunk along through the
-                    stream and calls the <code>onChunkVerified</code> callback.
-                </p>
-                <p>
-                    If the hash does not match, it throws an error and aborts
-                    the stream. So we stop downloading on hash mismatch.
-                </p>
-                `
-
-            }
         </div>
 
         <div class="stats">
@@ -288,10 +244,7 @@ const Example:FunctionComponent = function () {
        
         <div class="root-hash">
             <pre>
-                root hash: ${state.encodedData.value?.rootHash ||
-                    state.streamData.value?.rootLabel ||
-                    '-'
-                }
+                root hash: ${state.streamData.value?.rootLabel || '-'}
             </pre>
         </div>
 
@@ -308,17 +261,14 @@ const Example:FunctionComponent = function () {
 render(html`<${Example} />`, document.getElementById('root')!)
 
 async function verifyFile () {
-    if (!state.encodedData.value && !state.streamData.value) return
+    if (!state.streamData.value) return
 
     clearLog()
     state.isVerifying.value = true
 
     try {
-        const isSingleStream = state.path.value.includes('/single-stream')
-
-        if (isSingleStream && state.streamData.value) {
-            // Bab mode: decode and verify single stream
-            const { rootLabel, stream } = state.streamData.value
+        // Bab mode: decode and verify single stream
+        const { rootLabel, stream } = state.streamData.value
 
             // Check if textarea was modified
             const clientBase64 = state.base64Text.value
@@ -548,135 +498,6 @@ async function verifyFile () {
             )
             addLog('', 'info')
             addLog('Each chunk was verified.', 'info')
-        } else if (state.encodedData.value) {
-            // External metadata mode
-            const metadata = state.encodedData.value
-            addLog(
-                '=== Starting Verified Streaming Download (External Metadata) ===',
-                'info'
-            )
-            addLog(`Expected root hash: ${metadata.rootHash}`, 'hash')
-            addLog(`Total chunks to download: ${metadata.chunks.length}`, 'info')
-            addLog('', 'info')
-
-            // Get the client's base64 text (potentially modified)
-            const clientBase64 = state.base64Text.value
-            const serverBase64 = llamaBase64
-            const isModified = clientBase64 !== serverBase64
-
-            if (isModified) {
-                addLog('Verification will fail on first mismatched chunk', 'info')
-                addLog('', 'info')
-            }
-
-            const encoder = new TextEncoder()
-            const clientData = encoder.encode(clientBase64)
-
-            addLog(`Data size: ${clientData.length} bytes`, 'info')
-            addLog('', 'info')
-            addLog('Creating stream and verifier...', 'info')
-
-            // Create a ReadableStream that simulates downloading chunks
-            const downloadStream = new ReadableStream<Uint8Array>({
-                async start (controller) {
-                    addLog('Stream started', 'info')
-
-                    for (let i = 0; i < metadata.chunks.length; i++) {
-                        // Simulate network delay
-                        await new Promise(resolve => setTimeout(resolve, 0))
-
-                        const chunkOffset = i * metadata.chunkSize
-                        const chunkEnd = Math.min(
-                            chunkOffset + metadata.chunkSize,
-                            clientData.length
-                        )
-                        const chunk = clientData.slice(chunkOffset, chunkEnd)
-
-                        // Push chunk to stream
-                        controller.enqueue(chunk)
-                    }
-
-                    controller.close()
-                }
-            })
-
-            // Pipe through verifier stream
-            const verifiedChunks:Uint8Array[] = []
-            const verifier = createVerifier(metadata, {
-                // just log every chunk that is verified
-                onChunkVerified: (chunkIndex, totalChunks) => {
-                    // Only log every 50 chunks to avoid overwhelming the log
-                    if (
-                        chunkIndex % 50 === 0 ||
-                        chunkIndex === totalChunks
-                    ) {
-                        addLog('', 'info')
-                        addLog(
-                            `--- Chunk ${chunkIndex}/${totalChunks} ---`,
-                            'info'
-                        )
-                        addLog('Chunk verified and buffered', 'success')
-                    }
-                },
-
-                onError: (err) => {
-                    addLog(`Verification error: ${err.message}`, 'error')
-                }
-            })
-
-            const verifiedStream = downloadStream.pipeThrough(verifier)
-            const reader = verifiedStream.getReader()
-
-            // Read verified chunks
-            // NOTE: If a hash mismatch is detected, reader.read() will throw
-            // an error, aborting the stream processing immediately.
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                verifiedChunks.push(value)
-            }
-
-            addLog('', 'info')
-            addLog('=== Finalizing Verification ===', 'info')
-
-            // Combine all chunks
-            const totalLength = verifiedChunks.reduce(
-                (sum, c) => sum + c.length,
-                0
-            )
-            const fullFile = new Uint8Array(totalLength)
-            let offset = 0
-            for (const chunk of verifiedChunks) {
-                fullFile.set(chunk, offset)
-                offset += chunk.length
-            }
-
-            addLog(`Reconstructed file size: ${fullFile.length} bytes`, 'info')
-
-            // Verify root hash
-            addLog('', 'info')
-            addLog('Verifying root hash...', 'info')
-            const computedRootHash = await blake3(fullFile)
-            addLog(`Expected: ${metadata.rootHash}`, 'hash')
-            addLog(`Computed: ${computedRootHash}`, 'hash')
-
-            if (computedRootHash !== metadata.rootHash) {
-                throw new Error(
-                    'Root hash mismatch! File integrity check failed.'
-                )
-            }
-
-            addLog('', 'info')
-            addLog(
-                'File verified',
-                'success'
-            )
-            addLog('', 'info')
-            addLog(
-                'Each chunk was verified before the download finished.',
-                'info'
-            )
-        }
     } catch (error) {
         // Don't add redundant error logging if onError already logged it
         debug('error in stream', error)
@@ -710,76 +531,55 @@ async function encodeFile () {
         addLog(`Chunk size: ${state.chunkSize.value} bytes`, 'info')
         addLog('', 'info')
 
-        const isSingleStream = state.path.value.includes('/single-stream')
+        // Bab mode: create single stream with interleaved metadata
+        addLog(
+            'Encoding with Bab (single stream with interleaved metadata)...',
+            'info'
+        )
 
-        if (isSingleStream) {
-            // Bab mode: create single stream with interleaved metadata
-            addLog(
-                'Encoding with Bab (single stream with interleaved metadata)...',
-                'info'
-            )
+        const rootLabel = await getRootLabel(
+            serverData,
+            state.chunkSize.value
+        )
 
-            const rootLabel = await getRootLabel(
-                serverData,
-                state.chunkSize.value
-            )
+        addLog(`Root label: ${rootLabel}`, 'hash')
+        addLog('', 'info')
 
-            addLog(`Root label: ${rootLabel}`, 'hash')
-            addLog('', 'info')
-
-            // Create the actual Bab-encoded stream
-            const dataStream = new ReadableStream({
-                start (controller) {
-                    controller.enqueue(serverData)
-                    controller.close()
-                }
-            })
-
-            const encodedStream = createEncoder(state.chunkSize.value, dataStream)
-            const reader = encodedStream.getReader()
-            const chunks:Uint8Array[] = []
-
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                chunks.push(value)
+        // Create the actual Bab-encoded stream
+        const dataStream = new ReadableStream({
+            start (controller) {
+                controller.enqueue(serverData)
+                controller.close()
             }
+        })
 
-            const totalLength = chunks.reduce((sum, c) => sum + c.length, 0)
-            const stream = new Uint8Array(totalLength)
-            let offset = 0
-            for (const chunk of chunks) {
-                stream.set(chunk, offset)
-                offset += chunk.length
-            }
+        const encodedStream = createEncoder(state.chunkSize.value, dataStream)
+        const reader = encodedStream.getReader()
+        const chunks:Uint8Array[] = []
 
-            const numChunks = Math.ceil(serverData.length / state.chunkSize.value)
-            addLog(`Encoded ${numChunks} chunks successfully`, 'success')
-            addLog(`Bab stream size: ${stream.length} bytes`, 'info')
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            chunks.push(value)
+        }
 
-            state.streamData.value = { rootLabel, stream }
-            state.encodedData.value = null
-            state.stats.value = {
-                fileSize: serverData.length,
-                chunkSize: state.chunkSize.value,
-                chunkCount: numChunks
-            }
-        } else {
-            // External metadata mode
-            addLog('Encoding with external metadata...', 'info')
-            const metadata = await encode(serverData, state.chunkSize.value)
+        const totalLength = chunks.reduce((sum, c) => sum + c.length, 0)
+        const stream = new Uint8Array(totalLength)
+        let offset = 0
+        for (const chunk of chunks) {
+            stream.set(chunk, offset)
+            offset += chunk.length
+        }
 
-            addLog(`Root hash: ${metadata.rootHash}`, 'hash')
-            addLog('', 'info')
-            addLog(`Encoded ${metadata.chunks.length} chunks successfully`, 'success')
+        const numChunks = Math.ceil(serverData.length / state.chunkSize.value)
+        addLog(`Encoded ${numChunks} chunks successfully`, 'success')
+        addLog(`Bab stream size: ${stream.length} bytes`, 'info')
 
-            state.encodedData.value = metadata
-            state.streamData.value = null
-            state.stats.value = {
-                fileSize: metadata.fileSize,
-                chunkSize: metadata.chunkSize,
-                chunkCount: metadata.chunks.length
-            }
+        state.streamData.value = { rootLabel, stream }
+        state.stats.value = {
+            fileSize: serverData.length,
+            chunkSize: state.chunkSize.value,
+            chunkCount: numChunks
         }
     } catch (error) {
         addLog(`✗ Error: ${(error as Error).message}`, 'error')
@@ -791,7 +591,6 @@ async function encodeFile () {
 function handleChunkSizeChange (ev:Event) {
     const target = ev.target as HTMLSelectElement
     state.chunkSize.value = parseInt(target.value)
-    state.encodedData.value = null
     state.streamData.value = null
     state.stats.value = null
 }
@@ -801,51 +600,4 @@ function handleTextareaChange (ev:Event) {
     state.base64Text.value = target.value
 }
 
-function Explanation ({ route }:{ route:string }):ReturnType<typeof html>|null {
-    if (route === '/') {
-        return html`<p>
-            Metadata can be generated separately from the blob content.
-            This is good in <a href="https://github.com/substrate-system/baowser#metadata">
-                some use-cases
-            </a>. We fetch the blob, then call <code>createVerifier(metadata)</code>
-            ${NBSP}to create a <a href="https://developer.mozilla.org/en-US/docs/Web/API/TransformStream">
-                transform stream
-            </a> that will use the metadata to verify the file as it streams in.
-        </p>`
-    }
-
-    if (route.includes('single-stream')) {
-        return html`<p>
-            Alice encodes her data into a Merkle tree with interleaved labels
-            and data chunks (in depth-first order), and publishes the root hash
-            via a trusted channel. <strong>The root hash is the only trusted
-            input Bob needs</strong>.
-        </p>
-        <p>
-            Bob downloads the stream and verifies it incrementally by computing
-            hashes from the data and comparing them against the expected labels
-            in the stream. Each verification step chains up, to ultimately verify
-            against the trusted root hash. This enables incremental
-            verification. Bob can detect corruption as soon as a corrupted chunk
-            is processed.
-        </p>
-        <p>
-            For extra elegance, you can request data by the root hash, in a
-            content-addressed way, for example where the root hash is the
-            filename.
-        </p>
-        <p>
-            <strong>Demo</strong> ${EM_DASH} Modify the textarea to simulate a
-            corrupted transmission. The demo will flip bytes in the Bab stream
-            at the corresponding position. Verification should fail at the first
-            corrupted chunk.
-        </p>
-        `
-    }
-
-    return null
-}
-
-function getRoute ():{ path:string, text:string }|null {
-    return (routes.find(r => r.path === state.path.value) || null)
-}
+// Functions removed - no longer needed without routing
