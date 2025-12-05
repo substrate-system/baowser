@@ -3,6 +3,8 @@ import { bytesToHex, hexToBytes } from './util.js'
 import Debug from '@substrate-system/debug'
 const debug = Debug('baowser')
 
+export const DEFAULT_CHUNK_SIZE = 1024
+
 /**
  * Options for the verifier stream
  */
@@ -21,8 +23,8 @@ export interface VerifierOptions {
  *
  * @param {ReadableStream} stream - The encoded stream to decode and verify
  * @param {string} rootHash - The root hash
- * @param {number} chunkSize - chunk size used during encoding
- * @param {VerifierOptions} options - Optional callbacks for verification events
+ * @param {number} [chunkSize] - chunk size used during encoding
+ * @param {VerifierOptions} [options] - Optional callbacks for verification events
  * @returns {Promise<Uint8Array>} Promise resolving to the complete verified data
  * @throws {Error} Throws if verification fails due to:
  *   - Hash mismatch (computed hash doesn't match expected label)
@@ -33,7 +35,7 @@ export interface VerifierOptions {
 export async function verify (
     stream:ReadableStream<Uint8Array>,
     rootHash:string,
-    chunkSize:number,
+    chunkSize:number = DEFAULT_CHUNK_SIZE,
     options?:VerifierOptions
 ):Promise<Uint8Array> {
     const verifier = createVerifier(rootHash, chunkSize, options)
@@ -64,12 +66,9 @@ export async function verify (
 }
 
 // ============================================================================
-// Bab-compatible encoding with interleaved metadata (Merkle tree version)
+// interleaved metadata (Merkle tree version)
 // ============================================================================
 
-/**
- * Merkle tree node for Bab encoding
- */
 interface MerkleNode {
     label:string  // BLAKE3 hash
     isLeaf:boolean
@@ -370,7 +369,7 @@ createVerifier.LABEL_SIZE = 32
  */
 export async function getRootLabel (
     data:Uint8Array,
-    chunkSize:number
+    chunkSize:number = DEFAULT_CHUNK_SIZE
 ):Promise<string> {
     const tree = await buildMerkleTree(data, chunkSize)
     return tree.label
@@ -382,7 +381,7 @@ export async function getRootLabel (
  */
 async function buildMerkleTree (
     data:Uint8Array,
-    chunkSize:number
+    chunkSize:number = DEFAULT_CHUNK_SIZE
 ):Promise<MerkleNode> {
     const numChunks = Math.ceil(data.length / chunkSize)
 
