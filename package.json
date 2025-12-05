@@ -1,6 +1,6 @@
 {
   "name": "@substrate-system/baowser",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Streaming hash-based verification in the browser",
   "type": "module",
   "main": "dist/index.js",
