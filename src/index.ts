@@ -19,35 +19,16 @@ export interface VerifierOptions {
 }
 
 /**
- * Create a verifier stream that decodes Bab-encoded data with
- *   interleaved metadata.
- *
- * @param stream - The encoded stream to decode and verify
- * @param rootHash - The expected root hash for verification (your ONLY trusted input)
- * @param chunkSize - The chunk size used during encoding
- * @param options - Optional callbacks for verification events
- * @returns A ReadableStream of verified data chunks
- */
-export function createVerifier (
-    stream:ReadableStream<Uint8Array>,
-    rootHash:string,
-    chunkSize:number,
-    options?:VerifierOptions
-):ReadableStream<Uint8Array> {
-    return decodeBab(stream, rootHash, chunkSize, options)
-}
-
-/**
  * Verify a Bab-encoded stream and return the complete verified data.
  *
  * This is a convenience function that handles streaming, verification,
  * and collecting chunks into a single Uint8Array.
  *
  * @param stream - The encoded stream to decode and verify
- * @param rootHash - The expected root hash for verification (your ONLY trusted input)
+ * @param rootHash - The expected root hash for verification
  * @param chunkSize - The chunk size used during encoding
  * @param options - Optional callbacks for verification events
- * @returns {Promise<Uint8Array>} Promise resolving to the complete verified data
+ * @returns {Promise<Uint8Array>} Promise resolving to the complete data
  */
 export async function verify (
     stream:ReadableStream<Uint8Array>,
@@ -55,7 +36,8 @@ export async function verify (
     chunkSize:number,
     options?:VerifierOptions
 ):Promise<Uint8Array> {
-    const verifiedStream = decodeBab(stream, rootHash, chunkSize, options)
+    const verifier = createVerifier(rootHash, chunkSize, options)
+    const verifiedStream = stream.pipeThrough(verifier)
     const reader = verifiedStream.getReader()
     const chunks:Uint8Array[] = []
 
@@ -102,31 +84,6 @@ interface MerkleNode {
  */
 async function hashChunk (data:Uint8Array):Promise<string> {
     return await blake3(data)
-}
-
-/**
- * Hash an internal node (combines two child labels with byte count)
- */
-async function hashInner (
-    leftLabel:string,
-    rightLabel:string,
-    byteCount:number
-):Promise<string> {
-    // Combine left label, right label, and byte count
-    const leftBytes = hexToBytes(leftLabel)
-    const rightBytes = hexToBytes(rightLabel)
-    const countBytes = new Uint8Array(8)
-    const view = new DataView(countBytes.buffer)
-    view.setBigUint64(0, BigInt(byteCount), true) // little-endian
-
-    const combined = new Uint8Array(
-        leftBytes.length + rightBytes.length + countBytes.length
-    )
-    combined.set(leftBytes, 0)
-    combined.set(rightBytes, leftBytes.length)
-    combined.set(countBytes, leftBytes.length + rightBytes.length)
-
-    return blake3(combined)
 }
 
 /**
@@ -245,136 +202,89 @@ export function createEncoder (
 }
 
 /**
- * Emit a node and its children in depth-first order using a generator
+ * Create a verifier transform stream that decodes and verifies encoded data.
+ *
+ * Returns a TransformStream that accepts encoded chunks on the writable side
+ * and outputs verified data chunks on the readable side.
+ *
+ * @param rootHash - The expected root hash (should be trusted input)
+ * @param chunkSize - The chunk size used during encoding
+ * @param options - Optional callbacks for verification events
+ * @returns {TransformStream} A TransformStream<Uint8Array, Uint8Array>.
+ *  Transforms the input to an output stream of regular blob chunks.
+ *
+ * @example
+ * ```ts
+ * const verifier = createVerifier(rootHash, chunkSize)
+ * const verifiedStream = encodedStream.pipeThrough(verifier)
+ * ```
  */
-async function * emitNodeGenerator (
-    node:MerkleNode
-):AsyncGenerator<Uint8Array> {
-    if (node.isLeaf) {
-        // Yield chunk data
-        if (node.data) {
-            yield node.data
-        }
-    } else {
-        // Yield labels for left and right children
-        if (node.left) {
-            const labelBytes = hexToBytes(node.left.label)
-            yield labelBytes
-        }
-        if (node.right) {
-            const labelBytes = hexToBytes(node.right.label)
-            yield labelBytes
-        }
-
-        // Recursively yield children
-        if (node.left) {
-            yield * emitNodeGenerator(node.left)
-        }
-        if (node.right) {
-            yield * emitNodeGenerator(node.right)
-        }
-    }
-}
-
-/**
- * Internal function. Decode and verify a Bab-encoded stream with incremental
- *   Merkle tree verification.
- *
- * The rootLabel is the only trusted input. This single hash is
- * sufficient for complete incremental verification. As we decode the tree:
- * 1. We compute hashes of leaf nodes (data chunks)
- * 2. We compute hashes of internal nodes from their children
- * 3. At each step, we compare computed hashes against expected labels from the stream
- * 4. Everything chains up to verify against the rootLabel
- *
- * You can detect corruption as soon as it occurs, without downloading the
- * entire file first.
- *
- * Return a ReadableStream of verified data chunks
- */
-function decodeBab (
-    stream:ReadableStream<Uint8Array>,
+export function createVerifier (
     rootLabel:string,
     chunkSize:number,
     opts:VerifierOptions = {}
-):ReadableStream<Uint8Array> {
-    const LABEL_SIZE = 32  // BLAKE3 produces 32-byte hashes
+):TransformStream<Uint8Array, Uint8Array> {
+    const LABEL_SIZE = createVerifier.LABEL_SIZE
+    let buffer = new Uint8Array(0)
 
-    return new ReadableStream({
-        async start (controller) {
-            const reader = stream.getReader()
-            let buffer = new Uint8Array(0)
-            let totalLength = 0
-            let numChunks = 0
-            let offset = 0
+    return new TransformStream({
+        // Buffer incoming chunks
+        transform (chunk) {
+            const newBuffer = new Uint8Array(buffer.length + chunk.length)
+            newBuffer.set(buffer, 0)
+            newBuffer.set(chunk, buffer.length)
+            buffer = newBuffer
+        },
 
-            // Helper to ensure we have enough bytes in buffer
-            async function ensureBytes (needed:number):Promise<void> {
-                while (buffer.length - offset < needed) {
-                    const { done, value } = await reader.read()
-                    if (done) {
+        // Process all buffered data when stream ends
+        async flush (controller) {
+            try {
+                let offset = 0
+
+                // Helper to read bytes from buffer
+                function readBytes (count:number):Uint8Array {
+                    if (offset + count > buffer.length) {
                         throw new Error(
-                            `Unexpected end of stream. Needed ${needed} bytes, ` +
+                            `Not enough data in buffer. Needed ${count} bytes, ` +
                             `have ${buffer.length - offset}`
                         )
                     }
-                    // Append new data to buffer
-                    const newBuffer = new Uint8Array(
-                        buffer.length - offset + value.length
-                    )
-                    newBuffer.set(buffer.slice(offset), 0)
-                    newBuffer.set(value, buffer.length - offset)
-                    buffer = newBuffer
-                    offset = 0
+                    const result = buffer.slice(offset, offset + count)
+                    offset += count
+                    return result
                 }
-            }
 
-            // Read bytes from buffer
-            function readBytes (count:number):Uint8Array {
-                const result = buffer.slice(offset, offset + count)
-                offset += count
-                return result
-            }
-
-            try {
-                // Read length prefix
-                await ensureBytes(8)
-                const lengthView = new DataView(
-                    buffer.buffer,
-                    buffer.byteOffset + offset
-                )
-                totalLength = Number(lengthView.getBigUint64(0, true))
-                offset += 8
-                numChunks = Math.ceil(totalLength / chunkSize)
-
-                const verifiedChunks:Uint8Array[] = new Array(numChunks)
+                // Read length prefix (8 bytes, little-endian uint64)
+                const lengthBytes = readBytes(8)
+                const lengthView = new DataView(lengthBytes.buffer, lengthBytes.byteOffset)
+                const totalLength = Number(lengthView.getBigUint64(0, true))
+                const numChunks = Math.ceil(totalLength / chunkSize)
 
                 // Recursive function to decode a node
                 //
-                // This is where incremental verification happens! At each level:
+                // At each level:
                 // - For leaves: we hash the data chunk and return that hash
-                // - For internal nodes: we recursively decode children, verify their
-                //   computed hashes match the expected labels from the stream, then
-                //   compute this node's hash from its children
+                // - For internal nodes: recursively decode children, verify
+                //   their computed hashes match the expected labels,
+                //   then compute this node's hash from its children
                 // - Everything chains up to verify against the rootLabel
                 async function decodeNode (
                     start:number,
                     end:number
                 ):Promise<string> {
                     if (start === end) {
-                        // Leaf node - read chunk
+                        // Leaf node - read and verify chunk
                         const chunkIndex = start
                         const isLastChunk = chunkIndex === numChunks - 1
-                        const expectedSize = isLastChunk
-                            ? totalLength - (chunkIndex * chunkSize)
-                            : chunkSize
+                        const expectedSize = isLastChunk ?
+                            totalLength - (chunkIndex * chunkSize) :
+                            chunkSize
 
-                        await ensureBytes(expectedSize)
                         const chunkData = readBytes(expectedSize)
 
-                        // Compute this chunk's hash - this will be verified by our parent
+                        // Compute this chunk's hash
+                        // this will be verified by the parent
                         const label = await hashChunk(chunkData)
-                        verifiedChunks[chunkIndex] = chunkData
 
                         // Emit verified chunk immediately
                         controller.enqueue(chunkData)
@@ -386,8 +296,8 @@ function decodeBab (
                         return label
                     }
 
-                    // Internal node - read expected labels for children from the stream
-                    await ensureBytes(LABEL_SIZE * 2)
+                    // Internal node
+                    // read expected labels for children from the stream
                     const leftLabelBytes = readBytes(LABEL_SIZE)
                     const rightLabelBytes = readBytes(LABEL_SIZE)
 
@@ -399,28 +309,25 @@ function decodeBab (
                     const computedLeftLabel = await decodeNode(start, mid)
                     const computedRightLabel = await decodeNode(mid + 1, end)
 
-                    // INCREMENTAL VERIFICATION: Verify computed hashes match expected
-                    // labels from the stream. We verify each subtree
-                    // immediately, without needing to download everything first.
+                    // INCREMENTAL VERIFICATION
+                    // Verify computed hashes match expected labels from
+                    // the stream. Verify each subtree immediately
                     if (computedLeftLabel !== expectedLeftLabel) {
                         debug('if', computedLeftLabel, expectedLeftLabel)
-                        const error = new Error(
+                        throw new Error(
                             `Left child label mismatch at [${start},${mid}]. ` +
-                            `Expected: ${expectedLeftLabel}, ` +
-                            `Got: ${computedLeftLabel}. `
+                            `Expected: ${expectedLeftLabel}, Got: ${computedLeftLabel}`
                         )
-                        throw error
-                    } else if (computedRightLabel !== expectedRightLabel) {
+                    }
+                    if (computedRightLabel !== expectedRightLabel) {
                         debug('else', computedRightLabel, expectedRightLabel)
-                        const error = new Error(
+                        throw new Error(
                             `Right child label mismatch at [${mid + 1},${end}]. ` +
-                            `Expected: ${expectedRightLabel}, ` +
-                            `Got: ${computedRightLabel}. `
+                            `Expected: ${expectedRightLabel}, Got: ${computedRightLabel}`
                         )
-                        throw error
                     }
 
-                    // Compute this node's label
+                    // Compute this node's label from its children
                     let byteCount = 0
                     for (let i = start; i <= end; i++) {
                         if (i === numChunks - 1) {
@@ -430,44 +337,43 @@ function decodeBab (
                         }
                     }
 
-                    const parentLabel = await hashInner(
+                    return await hashInner(
                         computedLeftLabel,
                         computedRightLabel,
                         byteCount
                     )
-
-                    return parentLabel
                 }
 
                 // Decode the tree and verify
                 const computedRootLabel = await decodeNode(0, numChunks - 1)
 
-                // Verify root label - this is the final check that everything chains
-                // back to our ONLY trusted input (the root hash). If this matches,
-                // we know all chunks were verified correctly through the tree structure.
+                // Verify root label - the final check that everything chains
+                // back to our trusted root hash. If this matches,
+                // we know all chunks were verified correctly through the
+                // tree structure.
                 if (computedRootLabel !== rootLabel) {
-                    const error = new Error(
+                    throw new Error(
                         `Root label mismatch. Expected: ${rootLabel}, ` +
                         `Got: ${computedRootLabel}`
                     )
-                    throw error
                 }
 
-                controller.close()
+                // All verified successfully - terminate the stream
+                controller.terminate()
             } catch (error) {
-                // Only call onError if it hasn't been called already
-                // Errors from decodeNode already called onError
-                // But other errors (like stream read errors) need it
+                // Call onError callback if provided
                 if (opts.onError && error instanceof Error) {
                     opts.onError(error)
                 }
+                // Signal error to the stream
+                // this aborts both readable and writable sides
                 controller.error(error)
-            } finally {
-                reader.releaseLock()
             }
         }
     })
 }
+
+createVerifier.LABEL_SIZE = 32
 
 /**
  * Helper to get the root label from an encoded Bab stream
@@ -531,4 +437,61 @@ async function buildMerkleTree (
     }
 
     return buildNode(0, numChunks - 1)
+}
+
+/**
+ * Emit a node and its children in depth-first order using a generator
+ */
+async function * emitNodeGenerator (
+    node:MerkleNode
+):AsyncGenerator<Uint8Array> {
+    if (node.isLeaf) {
+        // Yield chunk data
+        if (node.data) {
+            yield node.data
+        }
+    } else {
+        // Yield labels for left and right children
+        if (node.left) {
+            const labelBytes = hexToBytes(node.left.label)
+            yield labelBytes
+        }
+        if (node.right) {
+            const labelBytes = hexToBytes(node.right.label)
+            yield labelBytes
+        }
+
+        // Recursively yield children
+        if (node.left) {
+            yield * emitNodeGenerator(node.left)
+        }
+        if (node.right) {
+            yield * emitNodeGenerator(node.right)
+        }
+    }
+}
+
+/**
+ * Hash an internal node (combines two child labels with byte count)
+ */
+async function hashInner (
+    leftLabel:string,
+    rightLabel:string,
+    byteCount:number
+):Promise<string> {
+    // Combine left label, right label, and byte count
+    const leftBytes = hexToBytes(leftLabel)
+    const rightBytes = hexToBytes(rightLabel)
+    const countBytes = new Uint8Array(8)
+    const view = new DataView(countBytes.buffer)
+    view.setBigUint64(0, BigInt(byteCount), true) // little-endian
+
+    const combined = new Uint8Array(
+        leftBytes.length + rightBytes.length + countBytes.length
+    )
+    combined.set(leftBytes, 0)
+    combined.set(rightBytes, leftBytes.length)
+    combined.set(countBytes, leftBytes.length + rightBytes.length)
+
+    return blake3(combined)
 }

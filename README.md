@@ -82,10 +82,13 @@ const chunkSize = 1024
 
 const response = await fetch('/data.bab')
 
-// Option 1: Using streaming API
-const verifiedStream = createVerifier(response.body, rootHash, chunkSize, {
+// Option 1: Using TransformStream API (most flexible)
+// createVerifier returns a TransformStream that you pipe through
+const verifier = createVerifier(rootHash, chunkSize, {
   onChunkVerified: (i, total) => console.log(`Verified ${i}/${total}`)
 })
+
+const verifiedStream = response.body.pipeThrough(verifier)
 
 // Read from verifiedStream...
 const reader = verifiedStream.getReader()
@@ -170,12 +173,14 @@ const encodedStream = createEncoder(chunkSize, data)
 const rootHash = 'abc123...'  // received via trusted channel
 const chunkSize = 1024
 
-// Option 1: Streaming API - verify as data arrives
+// Option 1: TransformStream API - pipe through verifier
 const response = await fetch('/data.bab')
-const verifiedStream = createVerifier(response.body, rootHash, chunkSize, {
+const verifier = createVerifier(rootHash, chunkSize, {
   onChunkVerified: (i, total) => console.log(`Verified ${i}/${total}`),
   onError: (err) => console.error('Verification failed:', err)
 })
+
+const verifiedStream = response.body.pipeThrough(verifier)
 
 // Read verified chunks
 const reader = verifiedStream.getReader()
