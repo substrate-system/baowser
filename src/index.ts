@@ -21,14 +21,19 @@ export interface VerifierOptions {
 /**
  * Verify a Bab-encoded stream and return the complete verified data.
  *
- * This is a convenience function that handles streaming, verification,
+ * Convenience function that handles streaming, verification,
  * and collecting chunks into a single Uint8Array.
  *
  * @param stream - The encoded stream to decode and verify
- * @param rootHash - The expected root hash for verification
+ * @param rootHash - The expected root hash for verification (your ONLY trusted input)
  * @param chunkSize - The chunk size used during encoding
  * @param options - Optional callbacks for verification events
- * @returns {Promise<Uint8Array>} Promise resolving to the complete data
+ * @returns {Promise<Uint8Array>} Promise resolving to the complete verified data
+ * @throws {Error} Throws if verification fails due to:
+ *   - Hash mismatch (computed hash doesn't match expected label)
+ *   - Root hash mismatch (final computed root doesn't match provided rootHash)
+ *   - Insufficient data in stream
+ *   - Stream read errors
  */
 export async function verify (
     stream:ReadableStream<Uint8Array>,
@@ -77,13 +82,6 @@ interface MerkleNode {
     right?:MerkleNode
     data?:Uint8Array  // For leaf nodes
     byteCount:number  // Total bytes in this subtree
-}
-
-/**
- * Hash a leaf node (chunk of data)
- */
-async function hashChunk (data:Uint8Array):Promise<string> {
-    return await blake3(data)
 }
 
 /**
@@ -494,4 +492,11 @@ async function hashInner (
     combined.set(countBytes, leftBytes.length + rightBytes.length)
 
     return blake3(combined)
+}
+
+/**
+ * Hash a leaf node (chunk of data)
+ */
+async function hashChunk (data:Uint8Array):Promise<string> {
+    return await blake3(data)
 }
