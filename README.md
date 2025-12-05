@@ -24,15 +24,20 @@ where the name comes from. Also, look at
 - [Install](#install)
 - [Example](#example)
   * [Encoding (Server-side)](#encoding-server-side)
+    + [Use the `write` helper](#use-the-write-helper)
+    + [Option 2: Manual encoding](#option-2-manual-encoding)
   * [Verification (Client-side)](#verification-client-side)
 - [Modules](#modules)
   * [ESM](#esm)
+    + [Node only](#node-only)
   * [Common JS](#common-js)
 - [How It Works](#how-it-works)
-- [Node.js API](#nodejs-api)
-  * [write(dir, data, options)](#writedir-data-options)
-  * [Error Handling](#error-handling)
+- [Node API](#node-api)
+  * [`write(dir, data, options)`](#writedir-data-options)
+    + [`write` Example](#write-example)
+- [Error Handling](#error-handling)
 - [See Also](#see-also)
+  * [Prior Art](#prior-art)
   * [Some Important Dependencies](#some-important-dependencies)
 
 <!-- tocstop -->
@@ -49,9 +54,9 @@ npm i -S @substrate-system/baowser
 
 ### Encoding (Server-side)
 
-#### Option 1: Using the `write` helper (easiest)
+#### Use the `write` helper
 
-The `write` function provides content-addressed storage - it encodes your data and saves it to a file named by its hash:
+Encode your data and save it to a file named by its hash.
 
 ```ts
 import { write } from '@substrate-system/baowser/fs'
@@ -59,8 +64,8 @@ import { write } from '@substrate-system/baowser/fs'
 // Write data to a content-addressed file
 const { rootHash, filePath } = await write(
   './data',  // Directory
-  Buffer.from('hello world'),  // Data (Buffer, Uint8Array, or ReadableStream)
-  { chunkSize: 1024 }
+  Buffer.from('hello world'),  // Data (Buffer, Uint8Array, or Node.js Readable)
+  { chunkSize: 1024 }  // default = 1024
 )
 
 console.log(`File: ${filePath}`)  // ./data/abc123...
@@ -70,7 +75,7 @@ console.log(`Hash: ${rootHash}`)  // abc123...
 // Serve the file at filePath to clients
 ```
 
-#### Option 2: Manual encoding (more control)
+#### Option 2: Manual encoding
 
 ```ts
 import {
@@ -80,9 +85,9 @@ import {
 
 // Your file data
 const fileData = new Uint8Array([/* ... */])
-const chunkSize = 1024 // 1KB chunks
+const chunkSize = 1024  // 1KB chunks, default
 
-// Get the root hash - this is your content identifier
+// Get the root hash - this is the CID
 const rootHash = await getRootLabel(fileData, chunkSize)
 
 // Create the encoded stream with interleaved metadata
@@ -126,7 +131,7 @@ while (true) {
 // Option 2 - Promise-based API
 const response2 = await fetch('/data.bab')
 const verifiedData = await verify(response2.body, rootHash, chunkSize)
-// verifiedData is complete Uint8Array, fully verified
+// verifiedData is the complete Uint8Array, fully verified
 // it will throw if verification fails at any point
 ```
 
@@ -137,7 +142,6 @@ This exposes ESM and common JS via
 
 ### ESM
 
-**Main module** (browser and Node.js):
 ```js
 import {
   createEncoder,
@@ -147,14 +151,14 @@ import {
 } from '@substrate-system/baowser'
 ```
 
-**Node.js file system helpers** (server-side only):
+#### Node only
+
 ```js
 import { write } from '@substrate-system/baowser/fs'
 ```
 
 ### Common JS
 
-**Main module**:
 ```js
 const {
   createEncoder,
@@ -164,7 +168,6 @@ const {
 } = require('@substrate-system/baowser')
 ```
 
-**Node.js file system helpers**:
 ```js
 const { write } = require('@substrate-system/baowser/fs')
 ```
@@ -175,7 +178,7 @@ The encoding is a Merkle tree where hash labels are interleaved
 with data chunks in depth-first order.
 **The root hash (32 bytes) is your ONLY trusted input**.
 
-The stream contains all the verification metadata (child node hashes),
+The stream contains all verification metadata (child node hashes),
 and that metadata is itself verified against the root hash during
 decoding. This enables incremental verification: at each step,
 you verify that subtrees match their expected labels,
@@ -185,17 +188,17 @@ If any hash does not match during verification,
 the stream throws an error and aborts immediately, before the download
 is complete.
 
-
 ## Node API
 
 ### `write(dir, data, options)`
 
-Encode data and write it to a file named by its root hash.
+Encode data and write it to a file in the given directory, using
+the root hash as the filename.
 
 ```ts
 async function write (
     dir:string,
-    data:Buffer|Uint8Array|ReadableStream<Uint8Array>,
+    data:Buffer|Uint8Array|Readable,
     { chunkSize = 1024 }:{ chunkSize?:number } = {}
 ):Promise<{ rootHash:string; filePath:string }>
 ```
@@ -204,6 +207,7 @@ async function write (
 
 ```ts
 import { write } from '@substrate-system/baowser/fs'
+import { createReadStream } from 'node:fs'
 
 // Write with Buffer
 const result1 = await write('./data', Buffer.from('hello'))
@@ -212,24 +216,15 @@ const result1 = await write('./data', Buffer.from('hello'))
 const data = new Uint8Array([1, 2, 3, 4, 5])
 const result2 = await write('./data', data, { chunkSize: 512 })
 
-// Write via ReadableStream
-const stream = fs.createReadStream('./input.txt')
-const nodeStream = stream[Symbol.asyncIterator] ?
-  Readable.toWeb(stream) : stream
-const result3 = await write('./data', nodeStream)
-
+// Write with Node.js Readable stream
+const stream = createReadStream('./input.txt')
+const result3 = await write('./data', stream)
 
 console.log(result3.rootHash)  // "abc123..."
 console.log(result3.filePath)  // "./data/abc123..."
 ```
 
-**Features:**
-- **Content-addressed storage**: Files are automatically named by their hash
-- **Automatic directory creation**: Creates directories recursively if they don't exist
-- **Multiple input types**: Accepts Buffer, Uint8Array, or ReadableStream
-- **Deterministic**: Same data always produces the same hash and filename
-
-### Error Handling
+## Error Handling
 
 When a hash mismatch is detected:
 
@@ -247,6 +242,13 @@ try {
 ```
 
 ## See Also
+
+### Prior Art
+
+* [worm-blossom/bab](https://github.com/worm-blossom/bab)
+* [bab in rust](https://codeberg.org/worm-blossom/bab_rs)
+* [n0-computer/bao-docs](https://github.com/n0-computer/bao-docs)
+* [oconnor663/bao](https://github.com/oconnor663/bao)
 
 ### Some Important Dependencies
 

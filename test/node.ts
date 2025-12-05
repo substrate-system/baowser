@@ -12,7 +12,7 @@ test('write file with Buffer', async t => {
     await cleanup()
 
     const testData = Buffer.from('hello world')
-    const { rootHash, filePath } = await write(TEST_DIR, testData, {
+    const { rootHash, filepath } = await write(TEST_DIR, testData, {
         chunkSize: CHUNK_SIZE
     })
 
@@ -21,15 +21,15 @@ test('write file with Buffer', async t => {
     t.ok(rootHash.length > 0, 'hash should not be empty')
 
     // Verify file path was returned
-    t.ok(filePath, 'should return file path')
-    t.ok(filePath.includes(rootHash), 'file path should contain hash')
+    t.ok(filepath, 'should return file path')
+    t.ok(filepath.includes(rootHash), 'file path should contain hash')
 
     // Verify file exists
-    const fileExists = fs.existsSync(filePath)
+    const fileExists = fs.existsSync(filepath)
     t.ok(fileExists, 'file should exist on disk')
 
     // Verify we can read and verify the file
-    const encodedData = await fs.promises.readFile(filePath)
+    const encodedData = await fs.promises.readFile(filepath)
     const encodedStream = new ReadableStream({
         start (controller) {
             controller.enqueue(encodedData)
@@ -53,19 +53,19 @@ test('write file with Uint8Array', async t => {
     await cleanup()
 
     const testData = generateTestData(5 * 1024) // 5KB
-    const { rootHash, filePath } = await write(TEST_DIR, testData, {
+    const { rootHash, filepath } = await write(TEST_DIR, testData, {
         chunkSize: CHUNK_SIZE
     })
 
     t.ok(rootHash, 'should return root hash')
-    t.ok(filePath, 'should return file path')
+    t.ok(filepath, 'should return file path')
 
     // Verify file exists
-    const fileExists = fs.existsSync(filePath)
+    const fileExists = fs.existsSync(filepath)
     t.ok(fileExists, 'file should exist on disk')
 
     // Read and verify
-    const encodedData = await fs.promises.readFile(filePath)
+    const encodedData = await fs.promises.readFile(filepath)
     const encodedStream = new ReadableStream({
         start (controller) {
             controller.enqueue(encodedData)
@@ -86,30 +86,28 @@ test('write file with Uint8Array', async t => {
     await cleanup()
 })
 
-test('write file with ReadableStream', async t => {
+test('write file with Node.js Readable stream', async t => {
     await cleanup()
 
     const testData = generateTestData(3 * 1024) // 3KB
-    const dataStream = new ReadableStream({
-        start (controller) {
-            controller.enqueue(testData)
-            controller.close()
-        }
-    })
 
-    const { rootHash, filePath } = await write(TEST_DIR, dataStream, {
+    // Create a Node.js Readable stream from the data
+    const { Readable } = await import('node:stream')
+    const dataStream = Readable.from([testData])
+
+    const { rootHash, filepath } = await write(TEST_DIR, dataStream, {
         chunkSize: CHUNK_SIZE
     })
 
     t.ok(rootHash, 'should return root hash')
-    t.ok(filePath, 'should return file path')
+    t.ok(filepath, 'should return file path')
 
     // Verify file exists
-    const fileExists = fs.existsSync(filePath)
+    const fileExists = fs.existsSync(filepath)
     t.ok(fileExists, 'file should exist on disk')
 
     // Read and verify
-    const encodedData = await fs.promises.readFile(filePath)
+    const encodedData = await fs.promises.readFile(filepath)
     const encodedStream = new ReadableStream({
         start (controller) {
             controller.enqueue(encodedData)
@@ -130,19 +128,19 @@ test('write creates directory if it does not exist', async t => {
     const nestedDir = path.join(TEST_DIR, 'nested', 'deep', 'path')
     const testData = Buffer.from('test data')
 
-    const { rootHash, filePath } = await write(nestedDir, testData, {
+    const { rootHash, filepath } = await write(nestedDir, testData, {
         chunkSize: CHUNK_SIZE
     })
 
     t.ok(rootHash, 'should return root hash')
-    t.ok(filePath, 'should return file path')
+    t.ok(filepath, 'should return file path')
 
     // Verify nested directory was created
     const dirExists = fs.existsSync(nestedDir)
     t.ok(dirExists, 'nested directory should be created')
 
     // Verify file exists in nested directory
-    const fileExists = fs.existsSync(filePath)
+    const fileExists = fs.existsSync(filepath)
     t.ok(fileExists, 'file should exist in nested directory')
 
     await cleanup()
@@ -170,15 +168,15 @@ test('write with different chunk sizes', async t => {
     const chunkSizes = [512, 1024, 2048]
 
     for (const chunkSize of chunkSizes) {
-        const { rootHash, filePath } = await write(TEST_DIR, testData, {
+        const { rootHash, filepath } = await write(TEST_DIR, testData, {
             chunkSize
         })
 
         t.ok(rootHash, `should return hash for chunk size ${chunkSize}`)
-        t.ok(fs.existsSync(filePath), `file should exist for chunk size ${chunkSize}`)
+        t.ok(fs.existsSync(filepath), `file should exist for chunk size ${chunkSize}`)
 
         // Verify the file can be read back
-        const encodedData = await fs.promises.readFile(filePath)
+        const encodedData = await fs.promises.readFile(filepath)
         const encodedStream = new ReadableStream({
             start (controller) {
                 controller.enqueue(encodedData)
@@ -194,7 +192,7 @@ test('write with different chunk sizes', async t => {
         )
 
         // Clean up after each iteration
-        await fs.promises.unlink(filePath)
+        await fs.promises.unlink(filepath)
     }
 
     await cleanup()
@@ -210,10 +208,10 @@ test('same data produces same hash and filename', async t => {
     const result2 = await write(TEST_DIR, testData, { chunkSize: CHUNK_SIZE })
 
     t.equal(result1.rootHash, result2.rootHash, 'hashes should be identical')
-    t.equal(result1.filePath, result2.filePath, 'file paths should be identical')
+    t.equal(result1.filepath, result2.filepath, 'file paths should be identical')
 
     // File should only exist once (second write overwrites first)
-    const fileExists = fs.existsSync(result1.filePath)
+    const fileExists = fs.existsSync(result1.filepath)
     t.ok(fileExists, 'file should exist')
 
     await cleanup()

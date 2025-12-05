@@ -70,14 +70,6 @@ export async function verifyFile (state:ReturnType<typeof State>) {
                 'Textarea modified - simulating corrupted transmission',
                 'info'
             )
-            State.addLog(state, '', 'info')
-            State.addLog(state, 'HOW THIS WORKS:', 'info')
-            State.addLog(state, '1. Alice creates Bab stream from ORIGINAL data (llama image)', 'info')
-            State.addLog(state, '2. Alice publishes root hash via trusted channel.', 'info')
-            State.addLog(state, '3. Bob downloads Bab stream (simulating with local stream)', 'info')
-            State.addLog(state, '4. Stream gets corrupted in transit (simulating with your edit)', 'info')
-            State.addLog(state, '5. Bob verifies with ONLY the root hash - incremental verification!', 'info')
-            State.addLog(state, '', 'info')
 
             // Create a copy of the original stream
             streamToVerify = new Uint8Array(stream)

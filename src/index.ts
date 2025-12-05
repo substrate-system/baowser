@@ -24,7 +24,7 @@ export interface VerifierOptions {
  * @param {ReadableStream} stream - The encoded stream to decode and verify
  * @param {string} rootHash - The root hash
  * @param {number} [chunkSize] - chunk size used during encoding
- * @param {VerifierOptions} [options] - Optional callbacks for verification events
+ * @param {VerifierOptions} [options] - Optional callback for verification events
  * @returns {Promise<Uint8Array>} Promise resolving to the complete verified data
  * @throws {Error} Throws if verification fails due to:
  *   - Hash mismatch (computed hash doesn't match expected label)
@@ -64,10 +64,6 @@ export async function verify (
 
     return result
 }
-
-// ============================================================================
-// interleaved metadata (Merkle tree version)
-// ============================================================================
 
 interface MerkleNode {
     label:string  // BLAKE3 hash

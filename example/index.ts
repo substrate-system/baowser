@@ -25,8 +25,6 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'staging') {
     window.state = state
 }
 
-// No routing needed - single mode only
-
 // Handler functions that call State methods with state parameter
 function handleChunkSizeChange (ev:Event) {
     State.handleChunkSizeChange(state, ev)
@@ -108,7 +106,7 @@ const Example:FunctionComponent = function () {
             <p>
                 Alice encodes her data into a Merkle tree with interleaved labels
                 and data chunks (in depth-first order), and publishes the root hash
-                via a trusted channel. <strong>The root hash is the ONLY trusted
+                via a trusted channel. <strong>The root hash is the only trusted
                 input Bob needs</strong>. With the root hash, Bob can
                 incrementally verify all the intermediate chunks transferred.
             </p>
