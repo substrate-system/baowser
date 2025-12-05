@@ -4,8 +4,8 @@ import { useRef, useEffect } from 'preact/hooks'
 import { useComputed } from '@preact/signals'
 import { humanBytes } from '@substrate-system/human-bytes'
 import '@substrate-system/css-normalize'
-import { verifyFile } from './state'
-import type { LogEntry } from './types'
+import { State, verifyFile } from './state.js'
+import llamaBase64 from './llama.jpg.base64.js'
 
 if (import.meta.env.DEV || import.meta.env.MODE === 'staging') {
     localStorage.setItem('DEBUG', 'baowser')
@@ -17,12 +17,36 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'staging') {
 const EM_DASH = '\u2014'
 const NBSP = '\u00A0'
 
+// Create state instance
+const state = State()
+
 if (import.meta.env.DEV || import.meta.env.MODE === 'staging') {
     // @ts-expect-error dev
     window.state = state
 }
 
 // No routing needed - single mode only
+
+// Handler functions that call State methods with state parameter
+function handleChunkSizeChange (ev:Event) {
+    State.handleChunkSizeChange(state, ev)
+}
+
+function handleTextareaChange (ev:Event) {
+    State.handleTextareaChange(state, ev)
+}
+
+function encodeFile () {
+    State.encodeFile(state)
+}
+
+function _verifyFile () {
+    verifyFile(state)
+}
+
+function clearLog () {
+    State.clearLog(state)
+}
 
 const Example:FunctionComponent = function () {
     const logContainerRef = useRef<HTMLDivElement>(null)
@@ -48,7 +72,7 @@ const Example:FunctionComponent = function () {
         </h1>
 
         <p class="subtitle">
-            Verify data using the${NBSP}
+            Verify data with the${NBSP}
             <a href="https://developer.mozilla.org/en-US/docs/Web/API/Streams_API">
                 web streams API
             </a>${NBSP}
@@ -59,7 +83,7 @@ const Example:FunctionComponent = function () {
 
         <p>
             Below is the image we are transferring. Below on the right is the
-            same image, <code>base64-encoded</code> to a string.
+            same image, <code>base64</code> encoded to a string.
         </p>
 
         <p>
@@ -85,21 +109,14 @@ const Example:FunctionComponent = function () {
                 Alice encodes her data into a Merkle tree with interleaved labels
                 and data chunks (in depth-first order), and publishes the root hash
                 via a trusted channel. <strong>The root hash is the ONLY trusted
-                input Bob needs</strong> - it serves as both the content identifier
-                and the complete verification authority.
+                input Bob needs</strong>. With the root hash, Bob can
+                incrementally verify all the intermediate chunks transferred.
             </p>
             <p>
                 Bob downloads the stream and verifies it incrementally by computing
                 hashes from the data and comparing them against the expected labels
                 in the stream. Each verification step chains up to ultimately verify
-                against the trusted root hash. This enables true incremental
-                verification - Bob can detect corruption as soon as the chunk
-                is processed ${EM_DASH} he doesn't need to download the entire file.
-            </p>
-            <p>
-                The beauty of this approach: when you request data by its hash,
-                that hash IS your source of truth. At every step during verification,
-                you can prove the data corresponds to the hash you requested.
+                against the trusted root hash.
             </p>
             <p>
                 <strong>Demo:</strong> Modify the textarea to simulate a corrupted
@@ -147,7 +164,7 @@ const Example:FunctionComponent = function () {
                 ${state.isEncoding.value ? 'Encoding...' : 'Encode File'}
             </button>
             <button
-                onClick=${verifyFile}
+                onClick=${_verifyFile}
                 disabled=${
                     !state.streamData.value ||
                     state.isVerifying.value ||

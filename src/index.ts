@@ -11,11 +11,6 @@ export interface VerifierOptions {
      * Callback invoked when a chunk is successfully verified
      */
     onChunkVerified?:(chunkIndex:number, totalChunks:number) => void
-
-    /**
-     * Callback invoked when verification fails
-     */
-    onError?:(error:Error) => void
 }
 
 /**
@@ -24,10 +19,10 @@ export interface VerifierOptions {
  * Convenience function that handles streaming, verification,
  * and collecting chunks into a single Uint8Array.
  *
- * @param stream - The encoded stream to decode and verify
- * @param rootHash - The expected root hash for verification (your ONLY trusted input)
- * @param chunkSize - The chunk size used during encoding
- * @param options - Optional callbacks for verification events
+ * @param {ReadableStream} stream - The encoded stream to decode and verify
+ * @param {string} rootHash - The root hash
+ * @param {number} chunkSize - chunk size used during encoding
+ * @param {VerifierOptions} options - Optional callbacks for verification events
  * @returns {Promise<Uint8Array>} Promise resolving to the complete verified data
  * @throws {Error} Throws if verification fails due to:
  *   - Hash mismatch (computed hash doesn't match expected label)
@@ -359,10 +354,6 @@ export function createVerifier (
                 // All verified successfully - terminate the stream
                 controller.terminate()
             } catch (error) {
-                // Call onError callback if provided
-                if (opts.onError && error instanceof Error) {
-                    opts.onError(error)
-                }
                 // Signal error to the stream
                 // this aborts both readable and writable sides
                 controller.error(error)

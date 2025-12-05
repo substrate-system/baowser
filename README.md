@@ -12,7 +12,8 @@
 Streaming hash-based verification in the browser.
 
 This is based on the [`bao` library](https://github.com/oconnor663/bao). That's
-where the name comes from. Also, look at [bab](https://github.com/worm-blossom/bab).
+where the name comes from. Also, look at
+[bab](https://github.com/worm-blossom/bab).
 
 [See a live demo](https://substrate-system.github.io/baowser/)
 
@@ -24,11 +25,10 @@ where the name comes from. Also, look at [bab](https://github.com/worm-blossom/b
 - [Example](#example)
   * [Encoding (Server-side)](#encoding-server-side)
   * [Verification (Client-side)](#verification-client-side)
-- [API](#api)
+- [Modules](#modules)
   * [ESM](#esm)
   * [Common JS](#common-js)
-- [Use](#use)
-  * [How It Works](#how-it-works)
+- [How It Works](#how-it-works)
   * [Complete Example](#complete-example)
   * [How Verification Works](#how-verification-works)
   * [Error Handling](#error-handling)
@@ -50,6 +50,7 @@ npm i -S @substrate-system/baowser
 ### Encoding (Server-side)
 
 ```ts
+import * as fs from 'node:fs'
 import {
   createEncoder,
   getRootLabel
@@ -57,6 +58,7 @@ import {
 
 // Your file data
 const fileData = new Uint8Array([/* ... */])
+// const fileData = await fs.readFile('./foobar.txt')
 const chunkSize = 1024 // 1KB chunks
 
 // Get the root hash - this is your content identifier
@@ -67,11 +69,16 @@ const encodedStream = createEncoder(chunkSize, fileData)
 
 // Publish the root hash via a trusted channel (IPFS CID, database, etc.)
 // Stream the encodedStream to clients
+
+// server example here
+
 ```
 
 ### Verification (Client-side)
 
-**Key Insight:** The root hash is your ONLY trusted input. This single 32-byte hash is sufficient for complete incremental verification. At every step during verification, you can prove that the data corresponds to the root hash you requested.
+The root hash is the only trusted input. The 32-byte hash is sufficient
+for incremental verification. At each chunk in the stream,
+you can prove that the data corresponds to the root hash you requested.
 
 ```ts
 import { createVerifier, verify } from '@substrate-system/baowser'
@@ -80,9 +87,9 @@ import { createVerifier, verify } from '@substrate-system/baowser'
 const rootHash = 'abc123...'
 const chunkSize = 1024
 
-const response = await fetch('/data.bab')
+const response = await fetch('/data.abc')
 
-// Option 1: Using TransformStream API (most flexible)
+// Option 1 - TransformStream API
 // createVerifier returns a TransformStream that you pipe through
 const verifier = createVerifier(rootHash, chunkSize, {
   onChunkVerified: (i, total) => console.log(`Verified ${i}/${total}`)
@@ -98,49 +105,19 @@ while (true) {
   // Use verified chunk...
 }
 
-// Option 2: Using promise-based API (simpler)
+// Option 2 - Promise-based API
 const response2 = await fetch('/data.bab')
 const verifiedData = await verify(response2.body, rootHash, chunkSize)
 // verifiedData is complete Uint8Array, fully verified
+// it will throw if verification fails at any point
 ```
 
-
-## API
+## Modules
 
 This exposes ESM and common JS via
 [package.json `exports` field](https://nodejs.org/api/packages.html#exports).
 
 ### ESM
-```js
-import { createEncoder, getRootLabel, createVerifier, verify } from 'baowser'
-```
-
-### Common JS
-```js
-const { createEncoder, getRootLabel, createVerifier, verify } = require('baowser')
-```
-
-## Use
-
-This uses browser native streams and the [Bab](https://worm-blossom.github.io/bab/) encoding format.
-
-### How It Works
-
-The encoding uses a Merkle tree structure where hash labels are interleaved with data chunks in depth-first order. **The root hash (32 bytes) is your ONLY trusted input** - this is shared via a trusted channel (IPFS CID, database, content-addressed identifier, etc.).
-
-The stream contains all the verification metadata (child node hashes), but crucially, that metadata is itself verified against the root hash during decoding. This enables true incremental verification: at each step, you verify that subtrees match their expected labels, which ultimately chain up to verify against the root hash.
-
-**Key properties:**
-- Content-addressed: The root hash IS the content identifier
-- Incremental verification: Detect corruption immediately as chunks arrive
-- Fail-fast: Download stops as soon as any mismatch is detected
-- Space-efficient: Only need to share a 32-byte hash
-- Trust-minimized: The hash is both the identifier AND the complete verification authority
-
-If any hash does not match during verification, the stream throws an error and aborts immediately.
-
-### Complete Example
-
 ```js
 import {
   createEncoder,
@@ -148,81 +125,44 @@ import {
   createVerifier,
   verify
 } from '@substrate-system/baowser'
-
-// ============================================================================
-// SERVER SIDE: Encode data into Bab format
-// ============================================================================
-
-const data = new Uint8Array([/* ... */])  // your data
-const chunkSize = 1024
-
-// Get the root hash - this is your content identifier
-const rootHash = await getRootLabel(data, chunkSize)
-
-// Create the encoded stream with interleaved metadata
-const encodedStream = createEncoder(chunkSize, data)
-
-// Publish rootHash via trusted channel (IPFS CID, database, etc.)
-// Stream encodedStream to clients
-
-
-// ============================================================================
-// CLIENT SIDE: Download and verify using ONLY the root hash
-// ============================================================================
-
-const rootHash = 'abc123...'  // received via trusted channel
-const chunkSize = 1024
-
-// Option 1: TransformStream API - pipe through verifier
-const response = await fetch('/data.bab')
-const verifier = createVerifier(rootHash, chunkSize, {
-  onChunkVerified: (i, total) => console.log(`Verified ${i}/${total}`),
-  onError: (err) => console.error('Verification failed:', err)
-})
-
-const verifiedStream = response.body.pipeThrough(verifier)
-
-// Read verified chunks
-const reader = verifiedStream.getReader()
-const chunks = []
-while (true) {
-  const { done, value } = await reader.read()
-  if (done) break
-  chunks.push(value)  // Only verified chunks reach here
-}
-
-// Option 2: Promise-based API - simpler interface
-const response2 = await fetch('/data.bab')
-const verifiedData = await verify(response2.body, rootHash, chunkSize, {
-  onChunkVerified: (i, total) => console.log(`${i}/${total}`)
-})
-// verifiedData is a Uint8Array with all verified data
 ```
 
-### How Verification Works
+### Common JS
+```js
+const {
+  createEncoder,
+  getRootLabel,
+  createVerifier,
+  verify
+} = require('@substrate-system/baowser')
+```
 
-During decoding, the verifier:
-1. Uses the trusted root hash as the reference point
-2. Recursively processes the Merkle tree in depth-first order
-3. Computes hashes of each data chunk
-4. Computes hashes of each internal node from its children
-5. Immediately compares each computed hash against the expected label from the stream
-6. Fails fast if any mismatch is detected - stops downloading immediately
+## How It Works
 
-**This is true incremental verification:** The root hash alone is sufficient to verify each chunk as it arrives, because each chunk's validity chains up through the tree structure to the root.
+The encoding is a Merkle tree where hash labels are interleaved
+with data chunks in depth-first order.
+**The root hash (32 bytes) is your ONLY trusted input**.
+
+The stream contains all the verification metadata (child node hashes),
+and that metadata is itself verified against the root hash during
+decoding. This enables incremental verification: at each step,
+you verify that subtrees match their expected labels,
+which ultimately chain up to verify against the root hash.
+
+If any hash does not match during verification,
+the stream throws an error and aborts immediately, before the download
+is complete.
 
 ### Error Handling
 
 When a hash mismatch is detected:
-1. The `onError` callback is invoked (if provided)
-2. An error is thrown from the stream
-3. The stream aborts - no more data is downloaded or processed
+
+1. An error is thrown from the stream
+2. The stream aborts - no more data is downloaded
 
 ```js
 try {
-  const verifiedData = await verify(stream, rootHash, chunkSize, {
-    onError: (err) => console.error('Verification failed:', err)
-  })
+  const verifiedData = await verify(stream, rootHash, chunkSize)
   // Use verified data...
 } catch (error) {
   console.error('Stream verification failed:', error.message)

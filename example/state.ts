@@ -2,6 +2,7 @@ import { signal, type Signal } from '@preact/signals'
 import Debug from '@substrate-system/debug'
 import llamaBase64 from './llama.jpg.base64'
 import type { Stats, LogEntry } from './types.js'
+import { createVerifier, getRootLabel, createEncoder } from '../src/index.js'
 const debug = Debug(import.meta.env.DEV)
 
 export function State () {
@@ -64,18 +65,19 @@ export async function verifyFile (state:ReturnType<typeof State>) {
         let streamToVerify = stream
 
         if (isModified) {
-            addLog(
+            State.addLog(
+                state,
                 'Textarea modified - simulating corrupted transmission',
                 'info'
             )
-            addLog('', 'info')
-            addLog('HOW THIS WORKS:', 'info')
-            addLog('1. Alice creates Bab stream from ORIGINAL data (llama image)', 'info')
-            addLog('2. Alice publishes root hash via trusted channel.', 'info')
-            addLog('3. Bob downloads Bab stream (simulating with local stream)', 'info')
-            addLog('4. Stream gets corrupted in transit (simulating with your edit)', 'info')
-            addLog('5. Bob verifies with ONLY the root hash - incremental verification!', 'info')
-            addLog('', 'info')
+            State.addLog(state, '', 'info')
+            State.addLog(state, 'HOW THIS WORKS:', 'info')
+            State.addLog(state, '1. Alice creates Bab stream from ORIGINAL data (llama image)', 'info')
+            State.addLog(state, '2. Alice publishes root hash via trusted channel.', 'info')
+            State.addLog(state, '3. Bob downloads Bab stream (simulating with local stream)', 'info')
+            State.addLog(state, '4. Stream gets corrupted in transit (simulating with your edit)', 'info')
+            State.addLog(state, '5. Bob verifies with ONLY the root hash - incremental verification!', 'info')
+            State.addLog(state, '', 'info')
 
             // Create a copy of the original stream
             streamToVerify = new Uint8Array(stream)
@@ -125,21 +127,21 @@ export async function verifyFile (state:ReturnType<typeof State>) {
                     streamToVerify[corruptionOffset + i] ^= 0xFF  // Flip all bits
                 }
 
-                addLog(`Data difference detected at byte ${firstDiffIndex} of ${originalBytes.length}`, 'info')
-                addLog(`Corrupting Bab stream at offset ${corruptionOffset} (${bytesToCorrupt} bytes)`, 'info')
-                addLog(`  Original byte: 0x${originalByte.toString(16).padStart(2, '0')}`, 'info')
-                addLog(`  Corrupted byte: 0x${streamToVerify[corruptionOffset].toString(16).padStart(2, '0')}`, 'info')
-                addLog('', 'info')
+                State.addLog(state, `Data difference detected at byte ${firstDiffIndex} of ${originalBytes.length}`, 'info')
+                State.addLog(state, `Corrupting Bab stream at offset ${corruptionOffset} (${bytesToCorrupt} bytes)`, 'info')
+                State.addLog(state, `  Original byte: 0x${originalByte.toString(16).padStart(2, '0')}`, 'info')
+                State.addLog(state, `  Corrupted byte: 0x${streamToVerify[corruptionOffset].toString(16).padStart(2, '0')}`, 'info')
+                State.addLog(state, '', 'info')
             } else {
-                addLog('No differences found between original and modified text', 'info')
-                addLog('Verification should succeed', 'success')
-                addLog('', 'info')
+                State.addLog(state, 'No differences found between original and modified text', 'info')
+                State.addLog(state, 'Verification should succeed', 'success')
+                State.addLog(state, '', 'info')
             }
         }
 
-        addLog('Creating download stream with simulated delays...', 'info')
-        addLog('Stream will verify incrementally as data arrives', 'info')
-        addLog('', 'info')
+        State.addLog(state, 'Creating download stream with simulated delays...', 'info')
+        State.addLog(state, 'Stream will verify incrementally as data arrives', 'info')
+        State.addLog(state, '', 'info')
 
         // Create a throttled stream that simulates network download
         const DOWNLOAD_CHUNK_SIZE = 16384 // 16KB chunks for network simulation
@@ -162,8 +164,8 @@ export async function verifyFile (state:ReturnType<typeof State>) {
             }
         })
 
-        addLog('Starting verification...', 'info')
-        addLog('', 'info')
+        State.addLog(state, 'Starting verification...', 'info')
+        State.addLog(state, '', 'info')
 
         // Decode and verify the stream
         //
@@ -202,31 +204,17 @@ export async function verifyFile (state:ReturnType<typeof State>) {
                         chunkIndex % 50 === 0 ||
                         chunkIndex === totalChunks
                     ) {
-                        addLog('', 'info')
-                        addLog(
+                        State.addLog(state, '', 'info')
+                        State.addLog(
+                            state,
                             `--- Chunk ${chunkIndex}/${totalChunks} ---`,
                             'info'
                         )
-                        addLog('Chunk verified incrementally', 'success')
+                        State.addLog(state, 'Chunk verified incrementally', 'success')
                         if (chunkIndex === 5) {
-                            addLog('(Logging every 50th chunk from now on...)', 'info')
+                            State.addLog(state, '(Logging every 50th chunk from now on...)', 'info')
                         }
                     }
-                },
-                onError: (err) => {
-                    debug('got an error', err)
-                    addLog('', 'info')
-                    addLog('='.repeat(60), 'error')
-                    addLog('INCREMENTAL VERIFICATION FAILED', 'error')
-                    addLog('='.repeat(60), 'error')
-                    addLog('', 'error')
-                    addLog(`Error: ${err.message}`, 'error')
-                    addLog('', 'error')
-                    addLog(
-                        'Stream was aborted early because the hash ' +
-                            "didn't match.",
-                        'error'
-                    )
                 }
             }
         )
@@ -261,19 +249,32 @@ export async function verifyFile (state:ReturnType<typeof State>) {
             offset += chunk.length
         }
 
-        addLog('', 'info')
-        addLog('=== Verification Complete ===', 'info')
-        addLog(`Reconstructed file size: ${fullFile.length} bytes`, 'info')
-        addLog('', 'info')
-        addLog(
+        State.addLog(state, '', 'info')
+        State.addLog(state, '=== Verification Complete ===', 'info')
+        State.addLog(state, `Reconstructed file size: ${fullFile.length} bytes`, 'info')
+        State.addLog(state, '', 'info')
+        State.addLog(
+            state,
             'File verified via Bab Merkle tree',
             'success'
         )
-        addLog('', 'info')
-        addLog('Each chunk was verified.', 'info')
+        State.addLog(state, '', 'info')
+        State.addLog(state, 'Each chunk was verified.', 'info')
     } catch (error) {
-        // Don't add redundant error logging if onError already logged it
         debug('error in stream', error)
+        State.addLog(state, '', 'info')
+        State.addLog(state, '='.repeat(60), 'error')
+        State.addLog(state, 'INCREMENTAL VERIFICATION FAILED', 'error')
+        State.addLog(state, '='.repeat(60), 'error')
+        State.addLog(state, '', 'error')
+        State.addLog(state, `Error: ${(error as Error).message}`, 'error')
+        State.addLog(state, '', 'error')
+        State.addLog(
+            state,
+            'Stream was aborted early because the hash ' +
+                "didn't match.",
+            'error'
+        )
     } finally {
         state.isVerifying.value = false
     }
@@ -292,12 +293,13 @@ State.encodeFile = async function encodeFile (state:ReturnType<typeof State>) {
         const encoder = new TextEncoder()
         const serverData = encoder.encode(serverBase64)
 
-        addLog(`Base64 text size: ${serverData.length} bytes`, 'info')
-        addLog(`Chunk size: ${state.chunkSize.value} bytes`, 'info')
-        addLog('', 'info')
+        State.addLog(state, `Base64 text size: ${serverData.length} bytes`, 'info')
+        State.addLog(state, `Chunk size: ${state.chunkSize.value} bytes`, 'info')
+        State.addLog(state, '', 'info')
 
         // Bab mode: create single stream with interleaved metadata
-        addLog(
+        State.addLog(
+            state,
             'Encoding with Bab (single stream with interleaved metadata)...',
             'info'
         )
@@ -307,8 +309,8 @@ State.encodeFile = async function encodeFile (state:ReturnType<typeof State>) {
             state.chunkSize.value
         )
 
-        addLog(`Root label: ${rootLabel}`, 'hash')
-        addLog('', 'info')
+        State.addLog(state, `Root label: ${rootLabel}`, 'hash')
+        State.addLog(state, '', 'info')
 
         // Create the actual Bab-encoded stream
         const dataStream = new ReadableStream({
@@ -337,8 +339,8 @@ State.encodeFile = async function encodeFile (state:ReturnType<typeof State>) {
         }
 
         const numChunks = Math.ceil(serverData.length / state.chunkSize.value)
-        addLog(`Encoded ${numChunks} chunks successfully`, 'success')
-        addLog(`Bab stream size: ${stream.length} bytes`, 'info')
+        State.addLog(state, `Encoded ${numChunks} chunks successfully`, 'success')
+        State.addLog(state, `Bab stream size: ${stream.length} bytes`, 'info')
 
         state.streamData.value = { rootLabel, stream }
         state.stats.value = {
@@ -347,20 +349,26 @@ State.encodeFile = async function encodeFile (state:ReturnType<typeof State>) {
             chunkCount: numChunks
         }
     } catch (error) {
-        addLog(`✗ Error: ${(error as Error).message}`, 'error')
+        State.addLog(state, `✗ Error: ${(error as Error).message}`, 'error')
     } finally {
         state.isEncoding.value = false
     }
 }
 
-function handleChunkSizeChange (ev:Event) {
+State.handleChunkSizeChange = function handleChunkSizeChange (
+    state:ReturnType<typeof State>,
+    ev:Event
+) {
     const target = ev.target as HTMLSelectElement
     state.chunkSize.value = parseInt(target.value)
     state.streamData.value = null
     state.stats.value = null
 }
 
-function handleTextareaChange (ev:Event) {
+State.handleTextareaChange = function handleTextareaChange (
+    state:ReturnType<typeof State>,
+    ev:Event
+) {
     const target = ev.target as HTMLTextAreaElement
     state.base64Text.value = target.value
 }
